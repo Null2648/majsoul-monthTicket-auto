@@ -107,3 +107,28 @@ test('exhausted metadata candidates are marked as non-retryable', async () => {
       /All supported client metadata candidates were rejected/.test(error.message)
   );
 });
+
+test('YoStar refresh is limited to JP authentication rejection with base secrets', () => {
+  const { shouldRefreshYostarCredentials } = require('../src/index');
+  const error = { yostarAuthRejected: true };
+  const credentials = {
+    uid: 'uid',
+    token: 'active-token',
+    baseUid: 'uid',
+    baseToken: 'base-token',
+    server: { key: 'jp' }
+  };
+
+  assert.equal(shouldRefreshYostarCredentials(error, credentials), true);
+  assert.equal(
+    shouldRefreshYostarCredentials(error, {
+      ...credentials,
+      server: { key: 'en' }
+    }),
+    false
+  );
+  assert.equal(
+    shouldRefreshYostarCredentials({}, credentials),
+    false
+  );
+});

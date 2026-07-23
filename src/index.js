@@ -17,6 +17,11 @@ const {
   parseProductVersion,
   parseUnityBuildId
 } = require('./client-metadata');
+const {
+  readTokenCache,
+  refreshYostarCredentials,
+  saveTokenCache
+} = require('./yostar-websdk');
 
 const DEFAULT_SERVER = 'jp';
 const BUY_GREEN_GIFT = false;
@@ -1001,6 +1006,8 @@ async function createSession(context, credentials) {
 
       errors.push({
         clientVersionString: clientMetadata.clientVersionString,
+        operation: error?.operation,
+        rpcCode: error?.rpcCode,
         message
       });
 
@@ -1014,6 +1021,11 @@ async function createSession(context, credentials) {
 
   const error = new Error(
     `All supported client metadata candidates were rejected during authentication: ${JSON.stringify(errors)}`
+  );
+  error.yostarAuthRejected = errors.some(
+    candidate =>
+      candidate.operation === 'oauth2Auth' &&
+      candidate.rpcCode === 151
   );
   error.retryable = false;
   throw error;
@@ -1101,11 +1113,17 @@ async function runActions(session) {
 
 function loadRuntimeConfig() {
   const server = getServerConfig(process.env.MS_SERVER);
-  const uid = process.env.UID;
-  const token = process.env.TOKEN;
+  const baseUid = process.env.UID;
+  const baseToken = process.env.TOKEN;
   const accessToken = process.env.ACCESS_TOKEN;
   const email = process.env.EMAIL;
   const password = process.env.PASSWORD;
+  const tokenCache =
+    server.key === 'jp' && baseUid && baseToken
+      ? readTokenCache(baseUid, baseToken)
+      : null;
+  const uid = tokenCache?.uid || baseUid;
+  const token = tokenCache?.token || baseToken;
 
   if (server.loginMode === 'account_password') {
     if (!email || !password) {
@@ -1115,9 +1133,16 @@ function loadRuntimeConfig() {
     fail('Set ACCESS_TOKEN, or both UID and TOKEN, for JP/EN/KR servers.');
   }
 
+  if (tokenCache) {
+    console.log('encrypted YoStar login cache loaded');
+  }
+
   return {
     uid,
     token,
+    baseUid,
+    baseToken,
+    yostarDeviceId: tokenCache?.deviceId,
     accessToken,
     email,
     password,
@@ -1132,6 +1157,61 @@ function shouldRetryWithOauthCode(checkResponse, { uid, token } = {}) {
   return Boolean(uid && token && !accessTokenIsUsable);
 }
 
+function shouldRefreshYostarCredentials(error, credentials) {
+  return Boolean(
+    error?.yostarAuthRejected &&
+    credentials?.server?.key === 'jp' &&
+    credentials?.uid &&
+    credentials?.token &&
+    credentials?.baseUid &&
+    credentials?.baseToken
+  );
+}
+
+async function createSessionWithYostarRefresh(context, credentials) {
+  try {
+    return await createSession(context, credentials);
+  } catch (error) {
+    if (!shouldRefreshYostarCredentials(error, credentials)) {
+      throw error;
+    }
+
+    console.warn(
+      'current UID/TOKEN was rejected after official client metadata checks -> ' +
+      'refreshing it through the official YoStar WebSDK'
+    );
+
+    const refreshed = await refreshYostarCredentials({
+      gameBase: credentials.server.base,
+      uid: credentials.uid,
+      token: credentials.token,
+      deviceId: credentials.yostarDeviceId
+    });
+    const refreshedCredentials = {
+      ...credentials,
+      uid: refreshed.uid,
+      token: refreshed.token,
+      accessToken: null
+    };
+    const session = await createSession(context, refreshedCredentials);
+
+    saveTokenCache(
+      {
+        uid: refreshed.uid,
+        token: refreshed.token,
+        deviceId: refreshed.deviceId,
+        sdkVersion: refreshed.sdkVersion,
+        updatedAt: new Date().toISOString()
+      },
+      credentials.baseUid,
+      credentials.baseToken
+    );
+    console.log('renewed YoStar login token saved to encrypted runtime cache');
+
+    return session;
+  }
+}
+
 async function run() {
   const credentials = loadRuntimeConfig();
   const { server } = credentials;
@@ -1143,7 +1223,7 @@ async function run() {
   for (let attempt = 1; attempt <= SESSION_BOOTSTRAP_ATTEMPTS; attempt += 1) {
     try {
       const context = await loadServerContext(server);
-      session = await createSession(context, credentials);
+      session = await createSessionWithYostarRefresh(context, credentials);
       break;
     } catch (error) {
       const shouldRetry =
@@ -1193,5 +1273,6 @@ module.exports = {
   requireRpcSuccess,
   run,
   runActions,
+  shouldRefreshYostarCredentials,
   shouldRetryWithOauthCode
 };
