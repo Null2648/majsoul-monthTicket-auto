@@ -92,3 +92,18 @@ test('oauth2Auth code 151 can trigger bounded client version recovery', () => {
   assert.equal(isClientVersionProbeError(authError), true);
   assert.equal(isClientVersionProbeError(checkError), false);
 });
+
+test('exhausted metadata candidates are marked as non-retryable', async () => {
+  const { createSession } = require('../src/index');
+  const context = {
+    server: { key: 'jp' },
+    clientVersionStringCandidates: []
+  };
+
+  await assert.rejects(
+    createSession(context, {}),
+    error =>
+      error.retryable === false &&
+      /All supported client metadata candidates were rejected/.test(error.message)
+  );
+});

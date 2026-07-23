@@ -1012,7 +1012,11 @@ async function createSession(context, credentials) {
     }
   }
 
-  throw new Error(`All client version candidates failed: ${JSON.stringify(errors)}`);
+  const error = new Error(
+    `All supported client metadata candidates were rejected during authentication: ${JSON.stringify(errors)}`
+  );
+  error.retryable = false;
+  throw error;
 }
 
 async function runActions(session) {
@@ -1143,6 +1147,7 @@ async function run() {
       break;
     } catch (error) {
       const shouldRetry =
+        error?.retryable !== false &&
         !(error instanceof MajsoulRpcError) &&
         !isVersionStringError(error) &&
         attempt < SESSION_BOOTSTRAP_ATTEMPTS;
