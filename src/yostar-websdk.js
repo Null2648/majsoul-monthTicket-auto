@@ -228,6 +228,7 @@ async function refreshYostarCredentials({
   const sdk = metadata || await loadOfficialWebSdkMetadata(gameBase);
   const resolvedDeviceId = deviceId || createStableDeviceId(uid, token);
   const errors = [];
+  let lastYostarCode;
 
   for (const host of sdk.hosts) {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -270,9 +271,12 @@ async function refreshYostarCredentials({
         return {
           ...refreshed,
           deviceId: resolvedDeviceId,
-          sdkVersion: sdk.version
+          metadata: sdk
         };
       } catch (error) {
+        if (error?.yostarCode) {
+          lastYostarCode = error.yostarCode;
+        }
         errors.push(
           `${new URL(host).host} attempt ${attempt}: ${error?.message || error}`
         );
@@ -284,7 +288,11 @@ async function refreshYostarCredentials({
     }
   }
 
-  throw new Error(`All YoStar WebSDK quick-login routes failed: ${errors.join('; ')}`);
+  const error = new Error(
+    `All YoStar WebSDK quick-login routes failed: ${errors.join('; ')}`
+  );
+  error.yostarCode = lastYostarCode;
+  throw error;
 }
 
 module.exports = {

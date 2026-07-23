@@ -1143,6 +1143,7 @@ function loadRuntimeConfig() {
     baseUid,
     baseToken,
     yostarDeviceId: tokenCache?.deviceId,
+    yostarMetadata: tokenCache?.webSdkMetadata,
     accessToken,
     email,
     password,
@@ -1169,47 +1170,101 @@ function shouldRefreshYostarCredentials(error, credentials) {
 }
 
 async function createSessionWithYostarRefresh(context, credentials) {
+  let activeCredentials = credentials;
+  let refreshed;
+  let refreshError;
+
+  if (
+    credentials.server.key === 'jp' &&
+    credentials.uid &&
+    credentials.token &&
+    credentials.baseUid &&
+    credentials.baseToken
+  ) {
+    try {
+      try {
+        refreshed = await refreshYostarCredentials({
+          gameBase: credentials.server.base,
+          uid: credentials.uid,
+          token: credentials.token,
+          deviceId: credentials.yostarDeviceId,
+          metadata: credentials.yostarMetadata
+        });
+      } catch (error) {
+        if (!credentials.yostarMetadata) {
+          throw error;
+        }
+
+        console.warn(
+          'cached YoStar WebSDK metadata was rejected -> refreshing official SDK metadata'
+        );
+        refreshed = await refreshYostarCredentials({
+          gameBase: credentials.server.base,
+          uid: credentials.uid,
+          token: credentials.token,
+          deviceId: credentials.yostarDeviceId
+        });
+      }
+
+      activeCredentials = {
+        ...credentials,
+        uid: refreshed.uid,
+        token: refreshed.token,
+        accessToken: null
+      };
+      console.log('YoStar login token renewed before game authentication');
+    } catch (error) {
+      refreshError = error;
+      console.warn(
+        error?.yostarCode === 100403
+          ? 'YoStar login token is expired; trying the remaining configured game credential'
+          : `YoStar token renewal was unavailable: ${error?.message || error}`
+      );
+    }
+  }
+
+  let session;
+
   try {
-    return await createSession(context, credentials);
+    session = await createSession(context, activeCredentials);
   } catch (error) {
-    if (!shouldRefreshYostarCredentials(error, credentials)) {
-      throw error;
+    if (
+      shouldRefreshYostarCredentials(error, credentials) &&
+      refreshError?.yostarCode === 100403
+    ) {
+      const expiredError = new Error(
+        'YoStar login token expired (WebSDK code 100403). ' +
+        'Issue a fresh LOGIN_UID/LOGIN_TOKEN once with test_sdk.Login and update ' +
+        'the repository UID/TOKEN secrets; later runs will renew and cache it automatically.'
+      );
+      expiredError.retryable = false;
+      expiredError.yostarCode = 100403;
+      throw expiredError;
     }
 
-    console.warn(
-      'current UID/TOKEN was rejected after official client metadata checks -> ' +
-      'refreshing it through the official YoStar WebSDK'
-    );
+    if (refreshError && !refreshError.yostarCode) {
+      error.retryable = true;
+    }
 
-    const refreshed = await refreshYostarCredentials({
-      gameBase: credentials.server.base,
-      uid: credentials.uid,
-      token: credentials.token,
-      deviceId: credentials.yostarDeviceId
-    });
-    const refreshedCredentials = {
-      ...credentials,
-      uid: refreshed.uid,
-      token: refreshed.token,
-      accessToken: null
-    };
-    const session = await createSession(context, refreshedCredentials);
+    throw error;
+  }
 
+  if (refreshed) {
     saveTokenCache(
       {
         uid: refreshed.uid,
         token: refreshed.token,
         deviceId: refreshed.deviceId,
-        sdkVersion: refreshed.sdkVersion,
+        webSdkMetadata: refreshed.metadata,
         updatedAt: new Date().toISOString()
       },
       credentials.baseUid,
       credentials.baseToken
     );
     console.log('renewed YoStar login token saved to encrypted runtime cache');
-
-    return session;
   }
+
+  return session;
 }
 
 async function run() {

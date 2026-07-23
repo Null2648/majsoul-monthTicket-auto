@@ -8,7 +8,8 @@ const {
   encryptTokenCache,
   extractQuickLoginResult,
   parseJpSdkConfig,
-  parseWebSdkRuntime
+  parseWebSdkRuntime,
+  refreshYostarCredentials
 } = require('../src/yostar-websdk');
 
 test('current YoStar WebSDK runtime metadata is parsed from official script', () => {
@@ -103,4 +104,30 @@ test('quick-login response returns the renewed game token', () => {
     }),
     { uid: '123', token: 'renewed' }
   );
+});
+
+test('quick-login preserves the official expired-token error code', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    text: async () => JSON.stringify({ Code: 100403 })
+  });
+
+  try {
+    await assert.rejects(
+      refreshYostarCredentials({
+        gameBase: 'https://game.example/',
+        uid: '123',
+        token: 'expired',
+        metadata: {
+          hosts: ['https://sdk.example'],
+          pid: 'JP-MJ',
+          version: '4.16.0',
+          signingSecret: '347467131a466f6865d7f2662e38841fbe2adb23'
+        }
+      }),
+      error => error.yostarCode === 100403
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
