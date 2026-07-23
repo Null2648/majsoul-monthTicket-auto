@@ -12,8 +12,7 @@ const {
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
-  buildWebClientVersionString,
-  extractClientVersionStrings,
+  buildUnityWebGLClientVersionString,
   normalizeResourceVersion,
   parseProductVersion
 } = require('./client-metadata');
@@ -26,9 +25,8 @@ const REVIVE_COIN_GOLD_BONUS = 18000;
 const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
 const HTTP_REQUEST_ATTEMPTS = 3;
 const HTTP_REQUEST_TIMEOUT_MS = 15000;
-const CLIENT_SCRIPT_REQUEST_TIMEOUT_MS = 60000;
 const SESSION_BOOTSTRAP_ATTEMPTS = 3;
-const MAX_CLIENT_VERSION_PROBES = 64;
+const MAX_CLIENT_VERSION_PROBES = 8;
 const CLIENT_VERSION_PROBE_DELAY_MS = 150;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
 
@@ -93,12 +91,6 @@ const SERVER_CONFIGS = {
     loginType: 0,
     currencyPlatforms: [1, 2, 5, 6, 8, 10, 11]
   }
-};
-
-const RESOURCE_RELEASE_URLS = {
-  jp: 'https://appstatic.mahjongsoul.com/v4/jp/resources/warehouseSettings/jp-release.json',
-  en: 'https://appstatic.mahjongsoul.com/v4/en/resources/warehouseSettings/en-release.json',
-  kr: 'https://appstatic.mahjongsoul.com/v4/kr/resources/warehouseSettings/kr-release.json'
 };
 
 const PROTO_TYPES = {
@@ -285,16 +277,6 @@ function compareDottedVersions(a, b) {
   return 0;
 }
 
-function extractResourceVersion(text) {
-  const versions = [...String(text || '').matchAll(/\b0\.\d+\.\d+\b/g)].map(match => match[0]);
-
-  if (!versions.length) {
-    return null;
-  }
-
-  return [...new Set(versions)].sort(compareDottedVersions).at(-1);
-}
-
 function getOverrideResourceVersion() {
   return process.env.MS_RESOURCE_VERSION || process.env.RESOURCE_VERSION || null;
 }
@@ -383,16 +365,24 @@ function getClientVersionStringCandidates({
   const cachedClientVersionString = cache.clientVersionStrings?.[serverKey];
   const overrideResourceVersion = getOverrideResourceVersion();
   const detectedResourceVersion = detectedClientVersionStrings
-    .filter(value => /^WebGL_\d{4}-/.test(value))
+    .filter(value => /^WebGL_\d{4}-0\./.test(value))
     .map(normalizeResourceVersion)
     .filter(Boolean)
     .sort(compareDottedVersions)
     .at(-1);
-  const resourceVersionCandidates = buildResourceVersionCandidates({
-    cachedResourceVersion,
-    detectedResourceVersion,
-    overrideResourceVersion
-  });
+  const cacheIsCurrent = isClientMetadataCacheCurrent(
+    serverKey,
+    webResourceVersion,
+    productVersion
+  );
+  const hasOfficialClientVersion = detectedClientVersionStrings.length > 0;
+  const resourceVersionCandidates = cacheIsCurrent || hasOfficialClientVersion
+    ? [overrideResourceVersion, cachedResourceVersion].filter(Boolean)
+    : buildResourceVersionCandidates({
+      cachedResourceVersion,
+      detectedResourceVersion,
+      overrideResourceVersion
+    });
 
   return buildClientVersionStringCandidates({
     overrideClientVersionString: getOverrideClientVersionString(),
@@ -400,11 +390,7 @@ function getClientVersionStringCandidates({
     cachedClientVersionString,
     resourceVersionCandidates,
     webResourceVersion,
-    preferCachedClientVersion: isClientMetadataCacheCurrent(
-      serverKey,
-      webResourceVersion,
-      productVersion
-    )
+    preferCachedClientVersion: cacheIsCurrent
   });
 }
 
@@ -440,93 +426,15 @@ function buildRoutesUrl(gatewayUrl, version, lang) {
   return url;
 }
 
-function buildUpgradeInfoUrl(gatewayUrl, version, lang) {
-  const url = new URL(`${gatewayUrl.replace(/\/+$/, '')}/api/clientgate/upgrade_info`);
-  url.searchParams.set('platform', 'Web');
+function resolveClientVersionStrings({ productVersion } = {}) {
+  const officialClientVersionString =
+    buildUnityWebGLClientVersionString(productVersion);
 
-  if (lang) {
-    url.searchParams.set('lang', lang);
-  }
+  console.log(
+    `official Unity metadata -> product=${productVersion} client_version_string=${officialClientVersionString}`
+  );
 
-  url.searchParams.set('version', version);
-  url.searchParams.set('randv', buildRandv());
-
-  return url;
-}
-
-async function resolveClientVersionStrings(
-  server,
-  { clientScriptUrl, gatewayUrl, productVersion, resourceVersion, routeLang } = {}
-) {
-  if (server.key === 'jp' && resourceVersion) {
-    const officialClientVersionString = buildWebClientVersionString(resourceVersion);
-    console.log(
-      `official JP web metadata -> resource=${resourceVersion} client_version_string=${officialClientVersionString}`
-    );
-    return [officialClientVersionString];
-  }
-
-  const sources = [];
-
-  if (clientScriptUrl) {
-    sources.push({
-      name: 'official client script',
-      url: clientScriptUrl,
-      timeoutMs: CLIENT_SCRIPT_REQUEST_TIMEOUT_MS,
-      allowResourceFallback: false
-    });
-  }
-
-  if (gatewayUrl && productVersion) {
-    sources.push({
-      name: 'clientgate upgrade_info',
-      url: buildUpgradeInfoUrl(gatewayUrl, productVersion, routeLang)
-    });
-  }
-
-  const releaseUrl = RESOURCE_RELEASE_URLS[server.key];
-
-  if (releaseUrl) {
-    const url = new URL(releaseUrl);
-    url.searchParams.set('randv', buildRandv());
-
-    sources.push({
-      name: 'warehouse release',
-      url
-    });
-  }
-
-  for (const source of sources) {
-    try {
-      const text = await requestText(source.url, {
-        timeoutMs: source.timeoutMs
-      });
-      const clientVersionStrings = extractClientVersionStrings(text);
-
-      if (clientVersionStrings.length) {
-        console.log(
-          `client version string auto-detected from ${source.name} -> ${clientVersionStrings.join(', ')}`
-        );
-        return clientVersionStrings;
-      }
-
-      const resourceVersion = source.allowResourceFallback === false
-        ? null
-        : extractResourceVersion(text);
-
-      if (resourceVersion) {
-        console.log(`resource version auto-detected from ${source.name} -> ${resourceVersion}`);
-        return [`WebGL_2022-${resourceVersion}`];
-      }
-
-      console.warn(`client version source has no supported version value: ${source.name}`);
-    } catch (error) {
-      console.warn(`client version source failed: ${source.name}: ${error?.message || error}`);
-    }
-  }
-
-  console.warn('client version auto-detect failed; using cached/fallback candidates');
-  return [];
+  return [officialClientVersionString];
 }
 
 function loadProtoTypes(liqiJson) {
@@ -572,7 +480,6 @@ async function loadServerContext(server) {
 
   const version = versionInfo.version;
   const codeDir = must(String(versionInfo.code || '').split('/')[0], 'Missing code directory for config fetch');
-  const clientScriptUrl = buildUrl(base, versionInfo.code);
   const productVersion = parseProductVersion(indexHtml);
 
   const [config, resManifest] = await Promise.all([
@@ -602,12 +509,8 @@ async function loadServerContext(server) {
     console.log('client metadata unchanged -> using the last successful cached settings');
   } else {
     console.log('client metadata update detected -> refreshing official version sources');
-    detectedClientVersionStrings = await resolveClientVersionStrings(server, {
-      clientScriptUrl,
-      gatewayUrl,
-      productVersion,
-      resourceVersion: version,
-      routeLang
+    detectedClientVersionStrings = resolveClientVersionStrings({
+      productVersion
     });
   }
 

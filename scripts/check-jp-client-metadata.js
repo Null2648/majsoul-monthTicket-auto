@@ -1,4 +1,7 @@
 const {
+  buildUnityWebGLClientVersionString
+} = require('../src/client-metadata');
+const {
   getServerConfig,
   loadServerContext
 } = require('../src/index');
@@ -6,7 +9,8 @@ const {
 async function check() {
   const server = getServerConfig('jp');
   const context = await loadServerContext(server);
-  const expectedClientVersionString = `web-${context.version.replace(/\.w$/, '')}`;
+  const expectedClientVersionString =
+    buildUnityWebGLClientVersionString(context.productVersion);
   const [currentClientVersionString] = context.clientVersionStringCandidates;
 
   if (currentClientVersionString !== expectedClientVersionString) {

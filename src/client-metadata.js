@@ -38,6 +38,16 @@ function buildWebClientVersionString(resourceVersion) {
   return `web-${normalized}`;
 }
 
+function buildUnityWebGLClientVersionString(productVersion) {
+  const normalized = normalizeResourceVersion(productVersion);
+
+  if (!parseResourceVersion(normalized)) {
+    throw new Error('A dotted Unity product version is required for the WebGL client');
+  }
+
+  return `WebGL_2022-${normalized}`;
+}
+
 function extractClientVersionStrings(text) {
   return [
     ...new Set(
@@ -194,7 +204,7 @@ function buildClientMetadata({
 
   const resolvedClientVersionString =
     normalizeClientVersionString(clientVersionString) ||
-    `WebGL_2022-${normalizeResourceVersion(resourceVersion)}`;
+    buildUnityWebGLClientVersionString(resourceVersion);
   const isWebClient = resolvedClientVersionString.startsWith('web-');
   const clientStringResourceVersion = normalizeResourceVersion(resolvedClientVersionString);
   const providedResourceVersion = String(resourceVersion || '')
@@ -291,6 +301,7 @@ module.exports = {
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
+  buildUnityWebGLClientVersionString,
   buildWebClientVersionString,
   extractClientVersionStrings,
   normalizeClientVersionString,
