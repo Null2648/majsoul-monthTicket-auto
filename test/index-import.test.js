@@ -67,3 +67,28 @@ test('explicit client version errors are treated as version mismatches', () => {
     true
   );
 });
+
+test('oauth2Auth code 151 can trigger bounded client version recovery', () => {
+  const {
+    isClientVersionProbeError,
+    requireRpcSuccess
+  } = require('../src/index');
+
+  let authError;
+  let checkError;
+
+  try {
+    requireRpcSuccess('oauth2Auth', { error: { code: 151 } });
+  } catch (error) {
+    authError = error;
+  }
+
+  try {
+    requireRpcSuccess('oauth2Check', { error: { code: 151 } });
+  } catch (error) {
+    checkError = error;
+  }
+
+  assert.equal(isClientVersionProbeError(authError), true);
+  assert.equal(isClientVersionProbeError(checkError), false);
+});

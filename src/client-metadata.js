@@ -122,12 +122,18 @@ function buildResourceVersionCandidates({
 
   const [major, minor, patch] = parsedBase;
 
-  for (let offset = 1; offset <= forwardScanLimit; offset += 1) {
+  const firstForwardScanLimit = Math.min(forwardScanLimit, 32);
+
+  for (let offset = 1; offset <= firstForwardScanLimit; offset += 1) {
     addCandidate(formatResourceVersion([major, minor, patch + offset]));
   }
 
   for (let nextPatch = 0; nextPatch <= nextMinorScanLimit; nextPatch += 1) {
     addCandidate(formatResourceVersion([major, minor + 1, nextPatch]));
+  }
+
+  for (let offset = firstForwardScanLimit + 1; offset <= forwardScanLimit; offset += 1) {
+    addCandidate(formatResourceVersion([major, minor, patch + offset]));
   }
 
   for (let offset = 1; offset <= backwardScanLimit && patch - offset >= 0; offset += 1) {
