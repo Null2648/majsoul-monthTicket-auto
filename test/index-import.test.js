@@ -112,7 +112,7 @@ test('a metadata update keeps bounded Unity resource recovery candidates', () =>
   const { getClientVersionStringCandidates } = require('../src/index');
   const previousResourceVersion = process.env.MS_RESOURCE_VERSION;
 
-  process.env.MS_RESOURCE_VERSION = '0.16.260';
+  process.env.MS_RESOURCE_VERSION = '0.16.212';
 
   try {
     const candidates = getClientVersionStringCandidates({
@@ -126,10 +126,10 @@ test('a metadata update keeps bounded Unity resource recovery candidates', () =>
     assert.deepEqual(candidates.slice(0, 6), [
       'WebGL_2022-4.0.11',
       'web-0.11.252',
-      'WebGL_2022-0.16.260',
-      'WebGL_2022-0.16.261',
-      'WebGL_2022-0.16.262',
-      'WebGL_2022-0.16.263'
+      'WebGL_2022-0.16.212',
+      'WebGL_2022-0.16.213',
+      'WebGL_2022-0.16.211',
+      'WebGL_2022-0.16.214'
     ]);
     assert.ok(candidates.length > 96);
   } finally {
