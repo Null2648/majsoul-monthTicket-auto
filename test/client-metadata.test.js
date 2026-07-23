@@ -157,6 +157,20 @@ test('resource version candidates continue forward from the newest known version
   assert.ok(candidates.includes('0.16.259'));
 });
 
+test('resource version recovery checks a new minor before a long patch scan', () => {
+  const candidates = buildResourceVersionCandidates({
+    cachedResourceVersion: '0.16.260',
+    forwardScanLimit: 40,
+    nextMinorScanLimit: 1,
+    backwardScanLimit: 0
+  });
+
+  assert.equal(candidates[0], '0.16.260');
+  assert.equal(candidates[32], '0.16.292');
+  assert.deepEqual(candidates.slice(33, 35), ['0.17.0', '0.17.1']);
+  assert.deepEqual(candidates.slice(35, 37), ['0.16.293', '0.16.294']);
+});
+
 test('resource version candidates normalize WebGL prefixes and remove duplicates', () => {
   const candidates = buildResourceVersionCandidates({
     overrideResourceVersion: 'WebGL_2022-0.16.261',
