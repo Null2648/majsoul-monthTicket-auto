@@ -132,3 +132,21 @@ test('YoStar refresh is limited to JP authentication rejection with base secrets
     false
   );
 });
+
+test('copied credential labels, quotes, and surrounding whitespace are removed', () => {
+  const { normalizeSecretCredential } = require('../src/index');
+
+  assert.equal(
+    normalizeSecretCredential(' UID: 12345\nTOKEN: abc ', 'UID'),
+    '12345'
+  );
+  assert.equal(
+    normalizeSecretCredential('UID: 12345\nTOKEN: abc', 'TOKEN'),
+    'abc'
+  );
+  assert.equal(
+    normalizeSecretCredential('  "abc-token"  ', 'TOKEN'),
+    'abc-token'
+  );
+  assert.equal(normalizeSecretCredential('   ', 'TOKEN'), undefined);
+});

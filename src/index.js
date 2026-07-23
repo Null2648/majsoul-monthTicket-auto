@@ -162,6 +162,33 @@ const buildUrl = (base, path) => `${base}/${path.replace(/^\/+/, '')}`;
 
 const normalizeServerKey = raw => (raw || '').trim().toLowerCase();
 
+function normalizeSecretCredential(raw, label) {
+  if (raw == null) {
+    return undefined;
+  }
+
+  let value = String(raw).trim();
+  const labeledValue = value.match(
+    new RegExp(`(?:^|\\r?\\n)${label}\\s*:\\s*([^\\r\\n]+)`, 'i')
+  )?.[1];
+
+  if (labeledValue) {
+    value = labeledValue.trim();
+  }
+
+  if (
+    value.length >= 2 &&
+    (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    )
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+
+  return value || undefined;
+}
+
 const buildRandv = () => {
   const now = Date.now();
   return String(now + Math.floor(Math.random() * now));
@@ -1113,9 +1140,12 @@ async function runActions(session) {
 
 function loadRuntimeConfig() {
   const server = getServerConfig(process.env.MS_SERVER);
-  const baseUid = process.env.UID;
-  const baseToken = process.env.TOKEN;
-  const accessToken = process.env.ACCESS_TOKEN;
+  const baseUid = normalizeSecretCredential(process.env.UID, 'UID');
+  const baseToken = normalizeSecretCredential(process.env.TOKEN, 'TOKEN');
+  const accessToken = normalizeSecretCredential(
+    process.env.ACCESS_TOKEN,
+    'ACCESS_TOKEN'
+  );
   const email = process.env.EMAIL;
   const password = process.env.PASSWORD;
   const tokenCache =
@@ -1325,6 +1355,7 @@ module.exports = {
   loadRuntimeConfig,
   loadServerContext,
   MajsoulRpcError,
+  normalizeSecretCredential,
   requireRpcSuccess,
   run,
   runActions,
