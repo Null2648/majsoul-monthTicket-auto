@@ -28,6 +28,8 @@ const HTTP_REQUEST_ATTEMPTS = 3;
 const HTTP_REQUEST_TIMEOUT_MS = 15000;
 const CLIENT_SCRIPT_REQUEST_TIMEOUT_MS = 60000;
 const SESSION_BOOTSTRAP_ATTEMPTS = 3;
+const MAX_CLIENT_VERSION_PROBES = 64;
+const CLIENT_VERSION_PROBE_DELAY_MS = 150;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
 
 const DEFAULT_DEVICE = {
@@ -381,6 +383,7 @@ function getClientVersionStringCandidates({
   const cachedClientVersionString = cache.clientVersionStrings?.[serverKey];
   const overrideResourceVersion = getOverrideResourceVersion();
   const detectedResourceVersion = detectedClientVersionStrings
+    .filter(value => /^WebGL_\d{4}-/.test(value))
     .map(normalizeResourceVersion)
     .filter(Boolean)
     .sort(compareDottedVersions)
@@ -410,6 +413,17 @@ function isVersionStringError(error) {
   return (
     message.includes('version_str') ||
     message.includes('client_version_string')
+  );
+}
+
+function isClientVersionProbeError(error) {
+  return (
+    isVersionStringError(error) ||
+    (
+      error instanceof MajsoulRpcError &&
+      error.operation === 'oauth2Auth' &&
+      error.rpcCode === 151
+    )
   );
 }
 
@@ -785,6 +799,7 @@ async function createSessionForRoute(context, route, credentials) {
     email,
     password
   } = credentials;
+  const authState = credentials.authState || (credentials.authState = {});
   const device = buildDevice(server);
 
   console.log(`trying gateway route ${route.id}: ${route.endpoint}`);
@@ -885,7 +900,9 @@ async function createSessionForRoute(context, route, credentials) {
     proto.ResOauth2Check
   );
 
-  let accessToken = configuredAccessToken;
+  let accessToken = authState.configuredAccessTokenRejected
+    ? null
+    : configuredAccessToken;
   let checkResponse;
 
   if (accessToken) {
@@ -901,11 +918,15 @@ async function createSessionForRoute(context, route, credentials) {
       console.warn(
         'configured access token was not accepted -> retrying the official UID/TOKEN login flow'
       );
+      authState.configuredAccessTokenRejected = true;
       accessToken = null;
     } else {
       checkResponse = await requireSuccess('oauth2Check', configuredCheckResponse);
     }
-  } else if (server.loginMode === 'oauth_code') {
+  } else if (
+    server.loginMode === 'oauth_code' &&
+    !authState.tokenAccessCheckRejected
+  ) {
     const directCheckResponse = await requestOauth2Check(token);
     const directCheckCode = Number(directCheckResponse?.error?.code ?? 0);
 
@@ -913,6 +934,8 @@ async function createSessionForRoute(context, route, credentials) {
       console.log('TOKEN contains a reusable MahjongSoul access token');
       accessToken = token;
       checkResponse = directCheckResponse;
+    } else {
+      authState.tokenAccessCheckRejected = true;
     }
   }
 
@@ -999,13 +1022,21 @@ async function createSessionWithRoutes(context, credentials) {
 
 async function createSession(context, credentials) {
   const errors = [];
-  const officialClientVersionString =
-    context.server.key === 'jp'
-      ? buildWebClientVersionString(context.version)
-      : null;
+  const clientVersionStringCandidates =
+    context.clientVersionStringCandidates.slice(0, MAX_CLIENT_VERSION_PROBES);
+  const sessionCredentials = {
+    ...credentials,
+    authState: {}
+  };
 
-  for (let index = 0; index < context.clientVersionStringCandidates.length; index += 1) {
-    const clientVersionString = context.clientVersionStringCandidates[index];
+  if (context.clientVersionStringCandidates.length > clientVersionStringCandidates.length) {
+    console.log(
+      `client version recovery will probe at most ${MAX_CLIENT_VERSION_PROBES} candidates this run`
+    );
+  }
+
+  for (let index = 0; index < clientVersionStringCandidates.length; index += 1) {
+    const clientVersionString = clientVersionStringCandidates[index];
     const clientMetadata = buildClientMetadata({
       productVersion: context.productVersion,
       resourceVersion: context.version,
@@ -1022,7 +1053,7 @@ async function createSession(context, credentials) {
     );
 
     try {
-      const session = await createSessionWithRoutes(candidateContext, credentials);
+      const session = await createSessionWithRoutes(candidateContext, sessionCredentials);
       saveSuccessfulClientVersion(
         context.server.key,
         {
@@ -1036,16 +1067,7 @@ async function createSession(context, credentials) {
     } catch (error) {
       const message = error?.message || String(error);
 
-      const canRetryOfficialClientVersion =
-        error instanceof MajsoulRpcError &&
-        error.operation === 'oauth2Auth' &&
-        error.rpcCode === 151 &&
-        clientVersionString !== officialClientVersionString &&
-        context.clientVersionStringCandidates
-          .slice(index + 1)
-          .includes(officialClientVersionString);
-
-      if (!isVersionStringError(error) && !canRetryOfficialClientVersion) {
+      if (!isClientVersionProbeError(error)) {
         error.resourceVersion = clientMetadata.clientVersion.resource;
         error.clientVersionString = clientMetadata.clientVersionString;
         throw error;
@@ -1056,11 +1078,11 @@ async function createSession(context, credentials) {
         message
       });
 
-      console.warn(
-        `client version failed: ${clientMetadata.clientVersionString}${
-          canRetryOfficialClientVersion ? ' -> retrying official JP web metadata' : ''
-        }`
-      );
+      console.warn(`client version rejected: ${clientMetadata.clientVersionString}`);
+
+      if (index + 1 < clientVersionStringCandidates.length) {
+        await delay(CLIENT_VERSION_PROBE_DELAY_MS);
+      }
     }
   }
 
@@ -1232,6 +1254,7 @@ module.exports = {
   createSession,
   getServerConfig,
   getClientVersionStringCandidates,
+  isClientVersionProbeError,
   isVersionStringError,
   loadRuntimeConfig,
   loadServerContext,
