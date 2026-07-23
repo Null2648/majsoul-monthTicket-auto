@@ -9,6 +9,7 @@ const {
   buildPasswordLoginPayload,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
+  buildUnityWebGLClientVersionString,
   buildWebClientVersionString,
   extractClientVersionStrings,
   normalizeClientVersionString,
@@ -111,20 +112,32 @@ test('buildClientMetadata preserves an exact client string discovered in officia
   });
 });
 
-test('current web metadata matches the official JP login payload', () => {
+test('current Unity metadata matches the official JP login payload', () => {
   const metadata = buildClientMetadata({
     productVersion: '4.0.11',
     resourceVersion: '0.11.252.w',
-    clientVersionString: 'web-0.11.252'
+    clientVersionString: 'WebGL_2022-4.0.11'
   });
 
   assert.deepEqual(metadata, {
     routeVersion: '4.0.11',
     clientVersion: {
-      resource: '0.11.252.w'
+      resource: '4.0.11',
+      package: '4.0.11'
     },
-    clientVersionString: 'web-0.11.252'
+    clientVersionString: 'WebGL_2022-4.0.11'
   });
+});
+
+test('official Unity client string is derived from productVersion', () => {
+  assert.equal(
+    buildUnityWebGLClientVersionString('4.0.11'),
+    'WebGL_2022-4.0.11'
+  );
+  assert.throws(
+    () => buildUnityWebGLClientVersionString('latest'),
+    /dotted Unity product version/
+  );
 });
 
 test('official JP web client string is derived from version.json resource metadata', () => {
