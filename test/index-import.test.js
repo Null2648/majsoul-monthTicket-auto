@@ -133,6 +133,43 @@ test('YoStar refresh is limited to JP authentication rejection with base secrets
   );
 });
 
+test('official YoStar account token is tried before quick-login cache token', () => {
+  const { buildYostarCredentialCandidates } = require('../src/index');
+  const credentials = {
+    uid: '123',
+    token: 'configured-token',
+    accessToken: 'stale-access-token',
+    server: { key: 'jp' }
+  };
+
+  const candidates = buildYostarCredentialCandidates(credentials, {
+    uid: '123',
+    token: 'configured-token',
+    responseUid: '123',
+    responseToken: 'quick-login-cache-token'
+  });
+
+  assert.deepEqual(
+    candidates.map(candidate => ({
+      uid: candidate.uid,
+      token: candidate.token,
+      accessToken: candidate.accessToken
+    })),
+    [
+      {
+        uid: '123',
+        token: 'configured-token',
+        accessToken: null
+      },
+      {
+        uid: '123',
+        token: 'quick-login-cache-token',
+        accessToken: null
+      }
+    ]
+  );
+});
+
 test('copied credential labels, quotes, and surrounding whitespace are removed', () => {
   const { normalizeSecretCredential } = require('../src/index');
 

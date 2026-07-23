@@ -267,9 +267,22 @@ async function refreshYostarCredentials({
           throw new Error(`YoStar WebSDK returned non-JSON HTTP ${response.status}`);
         }
 
-        const refreshed = extractQuickLoginResult(json);
+        const quickLoginResult = extractQuickLoginResult(json);
+
+        if (quickLoginResult.uid !== String(uid)) {
+          throw new Error(
+            'YoStar WebSDK quick login returned a different account UID'
+          );
+        }
+
         return {
-          ...refreshed,
+          // The official WebSDK keeps the account credentials it used for
+          // quick-login. UserInfo.Token belongs to the quick-login cache and is
+          // not the LOGIN_TOKEN returned to the game client.
+          uid: String(uid),
+          token: String(token),
+          responseUid: quickLoginResult.uid,
+          responseToken: quickLoginResult.token,
           deviceId: resolvedDeviceId,
           metadata: sdk
         };

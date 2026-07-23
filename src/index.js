@@ -1203,8 +1203,37 @@ function shouldRefreshYostarCredentials(error, credentials) {
   );
 }
 
+function buildYostarCredentialCandidates(credentials, refreshed) {
+  const candidates = [
+    {
+      ...credentials,
+      uid: refreshed.uid,
+      token: refreshed.token,
+      accessToken: null
+    }
+  ];
+
+  if (
+    refreshed.responseUid &&
+    refreshed.responseToken &&
+    (
+      refreshed.responseUid !== refreshed.uid ||
+      refreshed.responseToken !== refreshed.token
+    )
+  ) {
+    candidates.push({
+      ...credentials,
+      uid: refreshed.responseUid,
+      token: refreshed.responseToken,
+      accessToken: null
+    });
+  }
+
+  return candidates;
+}
+
 async function createSessionWithYostarRefresh(context, credentials) {
-  let activeCredentials = credentials;
+  let credentialCandidates = [credentials];
   let refreshed;
   let refreshError;
 
@@ -1240,54 +1269,70 @@ async function createSessionWithYostarRefresh(context, credentials) {
         });
       }
 
-      activeCredentials = {
-        ...credentials,
-        uid: refreshed.uid,
-        token: refreshed.token,
-        accessToken: null
-      };
-      console.log('YoStar login token renewed before game authentication');
+      credentialCandidates = buildYostarCredentialCandidates(
+        credentials,
+        refreshed
+      );
+      console.log('YoStar login token validated before game authentication');
     } catch (error) {
       refreshError = error;
       console.warn(
         error?.yostarCode === 100403
           ? 'YoStar login token is expired; trying the remaining configured game credential'
-          : `YoStar token renewal was unavailable: ${error?.message || error}`
+          : `YoStar login validation was unavailable: ${error?.message || error}`
       );
     }
   }
 
   let session;
+  let successfulCredentials;
 
-  try {
-    session = await createSession(context, activeCredentials);
-  } catch (error) {
-    if (
-      shouldRefreshYostarCredentials(error, credentials) &&
-      refreshError?.yostarCode === 100403
-    ) {
-      const expiredError = new Error(
-        'YoStar login token expired (WebSDK code 100403). ' +
-        'Issue a fresh LOGIN_UID/LOGIN_TOKEN once with test_sdk.Login and update ' +
-        'the repository UID/TOKEN secrets; later runs will renew and cache it automatically.'
-      );
-      expiredError.retryable = false;
-      expiredError.yostarCode = 100403;
-      throw expiredError;
+  for (let index = 0; index < credentialCandidates.length; index += 1) {
+    const activeCredentials = credentialCandidates[index];
+
+    try {
+      session = await createSession(context, activeCredentials);
+      successfulCredentials = activeCredentials;
+      break;
+    } catch (error) {
+      const hasQuickLoginResponseFallback =
+        index + 1 < credentialCandidates.length &&
+        error?.yostarAuthRejected;
+
+      if (hasQuickLoginResponseFallback) {
+        console.warn(
+          'official YoStar login credential was rejected -> trying quick-login response credential'
+        );
+        continue;
+      }
+
+      if (
+        shouldRefreshYostarCredentials(error, credentials) &&
+        refreshError?.yostarCode === 100403
+      ) {
+        const expiredError = new Error(
+          'YoStar login token expired (WebSDK code 100403). ' +
+          'Issue a fresh LOGIN_UID/LOGIN_TOKEN once with test_sdk.Login and update ' +
+          'the repository UID/TOKEN secrets; later runs will renew and cache it automatically.'
+        );
+        expiredError.retryable = false;
+        expiredError.yostarCode = 100403;
+        throw expiredError;
+      }
+
+      if (refreshError && !refreshError.yostarCode) {
+        error.retryable = true;
+      }
+
+      throw error;
     }
-
-    if (refreshError && !refreshError.yostarCode) {
-      error.retryable = true;
-    }
-
-    throw error;
   }
 
-  if (refreshed) {
+  if (refreshed && successfulCredentials) {
     saveTokenCache(
       {
-        uid: refreshed.uid,
-        token: refreshed.token,
+        uid: successfulCredentials.uid,
+        token: successfulCredentials.token,
         deviceId: refreshed.deviceId,
         webSdkMetadata: refreshed.metadata,
         updatedAt: new Date().toISOString()
@@ -1295,7 +1340,7 @@ async function createSessionWithYostarRefresh(context, credentials) {
       credentials.baseUid,
       credentials.baseToken
     );
-    console.log('renewed YoStar login token saved to encrypted runtime cache');
+    console.log('validated YoStar login state saved to encrypted runtime cache');
   }
 
   return session;
@@ -1351,6 +1396,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildYostarCredentialCandidates,
   createSession,
   getServerConfig,
   getClientVersionStringCandidates,

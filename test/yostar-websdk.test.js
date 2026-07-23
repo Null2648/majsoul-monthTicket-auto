@@ -91,7 +91,7 @@ test('authorization matches the official WebSDK MD5 signing layout', () => {
   assert.equal(authorization.Sign, '6401CAABE15CDE654D37BF77AA67DC5C');
 });
 
-test('quick-login response returns the renewed game token', () => {
+test('quick-login response exposes its cache credential', () => {
   assert.deepEqual(
     extractQuickLoginResult({
       Code: 200,
@@ -104,6 +104,43 @@ test('quick-login response returns the renewed game token', () => {
     }),
     { uid: '123', token: 'renewed' }
   );
+});
+
+test('quick-login validation preserves the official game login credential', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    text: async () => JSON.stringify({
+      Code: 200,
+      Data: {
+        UserInfo: {
+          ID: '123',
+          Token: 'quick-login-cache-token'
+        }
+      }
+    })
+  });
+
+  try {
+    const refreshed = await refreshYostarCredentials({
+      gameBase: 'https://game.example/',
+      uid: '123',
+      token: 'official-login-token',
+      deviceId: 'device-id',
+      metadata: {
+        hosts: ['https://sdk.example'],
+        pid: 'JP-MJ',
+        version: '4.16.0',
+        signingSecret: '347467131a466f6865d7f2662e38841fbe2adb23'
+      }
+    });
+
+    assert.equal(refreshed.uid, '123');
+    assert.equal(refreshed.token, 'official-login-token');
+    assert.equal(refreshed.responseUid, '123');
+    assert.equal(refreshed.responseToken, 'quick-login-cache-token');
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('quick-login preserves the official expired-token error code', async () => {
