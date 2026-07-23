@@ -10,7 +10,7 @@ test('src/index can be imported without starting the automation', () => {
   assert.equal(typeof index.runActions, 'function');
 });
 
-test('Majsoul oauth error 151 is reported as a rejected login token', () => {
+test('Majsoul oauth error 151 remains a typed RPC error without guessing its cause', () => {
   const {
     isVersionStringError,
     MajsoulRpcError,
@@ -27,8 +27,30 @@ test('Majsoul oauth error 151 is reported as a rejected login token', () => {
     requireRpcSuccess('oauth2Auth', response);
   } catch (error) {
     assert.equal(isVersionStringError(error), false);
-    assert.match(error.message, /repository secret ACCESS_TOKEN/);
+    assert.doesNotMatch(error.message, /token was rejected|repository secret ACCESS_TOKEN/);
   }
+});
+
+test('an unusable configured access token falls back to existing UID/TOKEN credentials', () => {
+  const { shouldRetryWithOauthCode } = require('../src/index');
+  const credentials = { uid: 'uid-value', token: 'login-token-value' };
+
+  assert.equal(
+    shouldRetryWithOauthCode({ error: { code: 151 } }, credentials),
+    true
+  );
+  assert.equal(
+    shouldRetryWithOauthCode({ has_account: false }, credentials),
+    true
+  );
+  assert.equal(
+    shouldRetryWithOauthCode({ has_account: true }, credentials),
+    false
+  );
+  assert.equal(
+    shouldRetryWithOauthCode({ error: { code: 151 } }, { token: 'only-token' }),
+    false
+  );
 });
 
 test('explicit client version errors are treated as version mismatches', () => {
