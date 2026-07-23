@@ -132,7 +132,8 @@ function buildClientVersionStringCandidates({
   detectedClientVersionStrings = [],
   cachedClientVersionString,
   resourceVersionCandidates = [],
-  webResourceVersion
+  webResourceVersion,
+  preferCachedClientVersion = false
 } = {}) {
   const candidates = [];
   const addCandidate = value => {
@@ -144,13 +145,21 @@ function buildClientVersionStringCandidates({
   };
 
   addCandidate(overrideClientVersionString);
+
+  if (preferCachedClientVersion) {
+    addCandidate(cachedClientVersionString);
+  }
+
   detectedClientVersionStrings.forEach(addCandidate);
 
   if (webResourceVersion) {
     addCandidate(`web-${normalizeResourceVersion(webResourceVersion)}`);
   }
 
-  addCandidate(cachedClientVersionString);
+  if (!preferCachedClientVersion) {
+    addCandidate(cachedClientVersionString);
+  }
+
   resourceVersionCandidates.forEach(resourceVersion => {
     addCandidate(`WebGL_2022-${normalizeResourceVersion(resourceVersion)}`);
   });
@@ -170,20 +179,32 @@ function buildClientMetadata({
   const resolvedClientVersionString =
     normalizeClientVersionString(clientVersionString) ||
     `WebGL_2022-${normalizeResourceVersion(resourceVersion)}`;
-  const resolvedResourceVersion = normalizeResourceVersion(
-    clientVersionString || resourceVersion
-  );
+  const isWebClient = resolvedClientVersionString.startsWith('web-');
+  const clientStringResourceVersion = normalizeResourceVersion(resolvedClientVersionString);
+  const providedResourceVersion = String(resourceVersion || '')
+    .trim()
+    .replace(/^v/, '');
+  const resolvedResourceVersion = isWebClient
+    ? normalizeResourceVersion(providedResourceVersion) === clientStringResourceVersion
+      ? providedResourceVersion
+      : `${clientStringResourceVersion}.w`
+    : clientStringResourceVersion;
 
   if (!resolvedResourceVersion) {
     throw new Error('resourceVersion is required');
   }
 
+  const clientVersion = {
+    resource: resolvedResourceVersion
+  };
+
+  if (!isWebClient) {
+    clientVersion.package = productVersion;
+  }
+
   return {
     routeVersion: productVersion,
-    clientVersion: {
-      resource: resolvedResourceVersion,
-      package: productVersion
-    },
+    clientVersion,
     clientVersionString: resolvedClientVersionString
   };
 }

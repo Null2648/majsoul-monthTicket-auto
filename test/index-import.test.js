@@ -27,7 +27,7 @@ test('Majsoul oauth error 151 is reported as a rejected login token', () => {
     requireRpcSuccess('oauth2Auth', response);
   } catch (error) {
     assert.equal(isVersionStringError(error), false);
-    assert.match(error.message, /Refresh the repository secrets UID and TOKEN/);
+    assert.match(error.message, /repository secret ACCESS_TOKEN/);
   }
 });
 

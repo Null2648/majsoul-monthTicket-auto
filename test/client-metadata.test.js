@@ -78,6 +78,22 @@ test('exact detected client strings are tried before cached scan candidates', ()
   ]);
 });
 
+test('unchanged metadata reuses the last successful client string first', () => {
+  const candidates = buildClientVersionStringCandidates({
+    detectedClientVersionStrings: ['WebGL_2023-0.18.7'],
+    cachedClientVersionString: 'web-0.11.252',
+    resourceVersionCandidates: ['0.16.260'],
+    webResourceVersion: '0.11.252.w',
+    preferCachedClientVersion: true
+  });
+
+  assert.deepEqual(candidates, [
+    'web-0.11.252',
+    'WebGL_2023-0.18.7',
+    'WebGL_2022-0.16.260'
+  ]);
+});
+
 test('buildClientMetadata preserves an exact client string discovered in official assets', () => {
   const metadata = buildClientMetadata({
     productVersion: '4.0.11',
@@ -91,6 +107,22 @@ test('buildClientMetadata preserves an exact client string discovered in officia
       package: '4.0.11'
     },
     clientVersionString: 'WebGL_2023-0.18.7'
+  });
+});
+
+test('current web metadata matches the official JP login payload', () => {
+  const metadata = buildClientMetadata({
+    productVersion: '4.0.11',
+    resourceVersion: '0.11.252.w',
+    clientVersionString: 'web-0.11.252'
+  });
+
+  assert.deepEqual(metadata, {
+    routeVersion: '4.0.11',
+    clientVersion: {
+      resource: '0.11.252.w'
+    },
+    clientVersionString: 'web-0.11.252'
   });
 });
 
