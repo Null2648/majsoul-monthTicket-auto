@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - main
-      - agent/yostar-websdk-refresh
     paths:
       - '.github/workflows/main.yml'
       - 'scripts/**'
@@ -67,6 +66,7 @@ jobs:
           UID: ${{ secrets.UID }}
           TOKEN: ${{ secrets.TOKEN }}
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          YOSTAR_DEVICE_ID: ${{ secrets.YOSTAR_DEVICE_ID }}
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
           MS_SERVER: ${{ secrets.MS_SERVER }}

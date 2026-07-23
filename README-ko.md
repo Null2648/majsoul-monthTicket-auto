@@ -26,7 +26,7 @@
 2. 포크한 저장소에서 `Settings > Secrets and variables > Actions`로 이동합니다.
 3. `New repository secret` 버튼을 눌러 `MS_SERVER` 시크릿을 추가합니다.
 4. `MS_SERVER` 값은 사용할 서버에 따라 `jp`, `en`, `kr`, `cn` 중 하나를 입력합니다. 입력하지 않으면 기본값은 `jp`입니다.
-5. `jp`, `en`, `kr` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `UID`와 `TOKEN` 시크릿을 추가합니다. 기존 `ACCESS_TOKEN` 시크릿이 있으면 먼저 재사용하고, 거부될 때 `UID`와 `TOKEN`으로 자동 재인증합니다.
+5. `jp`, `en`, `kr` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `UID`와 `TOKEN` 시크릿을 추가합니다. JP 서버는 같은 브라우저에서 아래 방법으로 확인한 `YOSTAR_DEVICE_ID`도 추가합니다. 기존 `ACCESS_TOKEN` 시크릿이 있으면 먼저 재사용하고, 거부될 때 `UID`와 `TOKEN`으로 자동 재인증합니다.
 6. `cn` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `EMAIL`과 `PASSWORD` 시크릿을 추가합니다. 값에는 계정 이메일과 비밀번호 원문을 입력합니다.
 7. `Settings > Actions > General`로 이동해 `Workflow permissions`를 `Read and write permissions`로 변경합니다.
 8. 기본 실행 시각은 매일 JST 기준 오전 6시 05분입니다. 변경하려면 `.github/workflows/main.yml`의 `cron` 값을 수정합니다.
@@ -46,6 +46,28 @@
 - SDK 버전, API 주소, 서명 정보는 암호화 캐시에서 즉시 재사용하고, 캐시가 거부될 때만 공식 클라이언트에서 최신값을 다시 수집합니다.
 - 갱신된 토큰은 기존 `UID`/`TOKEN` 시크릿으로 암호화해 `auth-cache.json`에 저장하므로 다음 실행부터 바로 재사용합니다. 평문 토큰은 저장소에 기록하지 않습니다.
 - 현재 Unity 클라이언트에는 예전 `game`/`Laya` 전역 객체가 없으므로 위의 `test_sdk.Login` 방법을 사용해야 합니다.
+
+### JP YoStar DeviceID 확인
+
+JP 로그인 토큰은 발급한 브라우저의 YoStar DeviceID와 함께 검증됩니다. 게임을 로그인한 브라우저의 개발자 도구 콘솔에서 아래 코드를 실행하고, 출력된 값만 `YOSTAR_DEVICE_ID` Secret에 저장합니다.
+
+```js
+{
+  const request = indexedDB.open('websdk');
+  const db = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const get = db.transaction('cache', 'readonly')
+    .objectStore('cache')
+    .get('cache');
+  const cache = await new Promise((resolve, reject) => {
+    get.onsuccess = () => resolve(get.result);
+    get.onerror = () => reject(get.error);
+  });
+  console.log(`YOSTAR_DEVICE_ID: ${cache.deviceId}`);
+}
+```
 
 ## 주의
 - GitHub Actions는 서버 상황에 따라 최대 30분까지 지연될 수 있습니다.

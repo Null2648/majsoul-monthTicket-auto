@@ -1146,6 +1146,10 @@ function loadRuntimeConfig() {
     process.env.ACCESS_TOKEN,
     'ACCESS_TOKEN'
   );
+  const configuredYostarDeviceId = normalizeSecretCredential(
+    process.env.YOSTAR_DEVICE_ID,
+    'YOSTAR_DEVICE_ID'
+  );
   const email = process.env.EMAIL;
   const password = process.env.PASSWORD;
   const tokenCache =
@@ -1172,7 +1176,7 @@ function loadRuntimeConfig() {
     token,
     baseUid,
     baseToken,
-    yostarDeviceId: tokenCache?.deviceId,
+    yostarDeviceId: configuredYostarDeviceId || tokenCache?.deviceId,
     yostarMetadata: tokenCache?.webSdkMetadata,
     accessToken,
     email,
