@@ -108,6 +108,39 @@ test('exhausted metadata candidates are marked as non-retryable', async () => {
   );
 });
 
+test('a metadata update keeps bounded Unity resource recovery candidates', () => {
+  const { getClientVersionStringCandidates } = require('../src/index');
+  const previousResourceVersion = process.env.MS_RESOURCE_VERSION;
+
+  process.env.MS_RESOURCE_VERSION = '0.16.260';
+
+  try {
+    const candidates = getClientVersionStringCandidates({
+      serverKey: 'jp-test-recovery',
+      detectedClientVersionStrings: ['WebGL_2022-4.0.11'],
+      webResourceVersion: '0.11.252.w',
+      productVersion: '4.0.11',
+      buildId: 'jp-WebGL-release-4.0.11(12)'
+    });
+
+    assert.deepEqual(candidates.slice(0, 6), [
+      'WebGL_2022-4.0.11',
+      'web-0.11.252',
+      'WebGL_2022-0.16.260',
+      'WebGL_2022-0.16.261',
+      'WebGL_2022-0.16.262',
+      'WebGL_2022-0.16.263'
+    ]);
+    assert.ok(candidates.length > 96);
+  } finally {
+    if (previousResourceVersion === undefined) {
+      delete process.env.MS_RESOURCE_VERSION;
+    } else {
+      process.env.MS_RESOURCE_VERSION = previousResourceVersion;
+    }
+  }
+});
+
 test('YoStar refresh is limited to JP authentication rejection with base secrets', () => {
   const { shouldRefreshYostarCredentials } = require('../src/index');
   const error = { yostarAuthRejected: true };

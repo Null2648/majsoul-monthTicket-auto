@@ -32,7 +32,10 @@ const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
 const HTTP_REQUEST_ATTEMPTS = 3;
 const HTTP_REQUEST_TIMEOUT_MS = 15000;
 const SESSION_BOOTSTRAP_ATTEMPTS = 3;
-const MAX_CLIENT_VERSION_PROBES = 8;
+// A successful client string is persisted and remains the first candidate, so the
+// normal daily path still performs one authentication attempt. This wider bound is
+// only consumed after MahjongSoul rejects that fast path during a client update.
+const MAX_CLIENT_VERSION_PROBES = 96;
 const CLIENT_VERSION_PROBE_DELAY_MS = 150;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
 
@@ -424,14 +427,11 @@ function getClientVersionStringCandidates({
     productVersion,
     buildId
   );
-  const hasOfficialClientVersion = detectedClientVersionStrings.length > 0;
-  const resourceVersionCandidates = cacheIsCurrent || hasOfficialClientVersion
-    ? [overrideResourceVersion, cachedResourceVersion].filter(Boolean)
-    : buildResourceVersionCandidates({
-      cachedResourceVersion,
-      detectedResourceVersion,
-      overrideResourceVersion
-    });
+  const resourceVersionCandidates = buildResourceVersionCandidates({
+    cachedResourceVersion,
+    detectedResourceVersion,
+    overrideResourceVersion
+  });
 
   return buildClientVersionStringCandidates({
     overrideClientVersionString: getOverrideClientVersionString(),
@@ -476,14 +476,14 @@ function buildRoutesUrl(gatewayUrl, version, lang) {
 }
 
 function resolveClientVersionStrings({ productVersion } = {}) {
-  const officialClientVersionString =
+  const unityPackageCandidate =
     buildUnityWebGLClientVersionString(productVersion);
 
   console.log(
-    `official Unity metadata -> product=${productVersion} client_version_string=${officialClientVersionString}`
+    `official Unity metadata -> product=${productVersion} package_candidate=${unityPackageCandidate}`
   );
 
-  return [officialClientVersionString];
+  return [unityPackageCandidate];
 }
 
 function loadProtoTypes(liqiJson) {
@@ -988,7 +988,7 @@ async function createSession(context, credentials) {
 
   if (context.clientVersionStringCandidates.length > clientVersionStringCandidates.length) {
     console.log(
-      `client version recovery will probe at most ${MAX_CLIENT_VERSION_PROBES} candidates this run`
+      `client version recovery is armed; at most ${MAX_CLIENT_VERSION_PROBES} candidates will be tried only if the fast path is rejected`
     );
   }
 
