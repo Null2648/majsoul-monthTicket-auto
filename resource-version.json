@@ -1,3 +1,16 @@
 {
-  "jp": "0.16.212"
+  "jp": "4.0.11",
+  "clientVersionStrings": {
+    "jp": "WebGL_2022-4.0.11"
+  },
+  "sourceVersions": {
+    "jp": "0.11.252.w"
+  },
+  "productVersions": {
+    "jp": "4.0.11"
+  },
+  "buildIds": {
+    "jp": "jp-WebGL-release-4.0.11(12)"
+  },
+  "updatedAt": "2026-07-23T17:17:38.009Z"
 }
