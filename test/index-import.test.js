@@ -9,3 +9,33 @@ test('src/index can be imported without starting the automation', () => {
   assert.equal(typeof index.loadServerContext, 'function');
   assert.equal(typeof index.runActions, 'function');
 });
+
+test('Majsoul error 151 is classified as a client version mismatch', () => {
+  const {
+    isVersionStringError,
+    MajsoulRpcError,
+    requireRpcSuccess
+  } = require('../src/index');
+  const response = { error: { code: 151 } };
+
+  assert.throws(
+    () => requireRpcSuccess('oauth2Auth', response),
+    error => error instanceof MajsoulRpcError && error.rpcCode === 151
+  );
+
+  try {
+    requireRpcSuccess('oauth2Auth', response);
+  } catch (error) {
+    assert.equal(isVersionStringError(error), true);
+  }
+});
+
+test('unrelated Majsoul RPC errors are not treated as version mismatches', () => {
+  const { isVersionStringError, requireRpcSuccess } = require('../src/index');
+
+  try {
+    requireRpcSuccess('oauth2Auth', { error: { code: 103 } });
+  } catch (error) {
+    assert.equal(isVersionStringError(error), false);
+  }
+});

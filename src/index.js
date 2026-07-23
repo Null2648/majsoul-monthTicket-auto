@@ -7,6 +7,7 @@ const protobuf = require('protobufjs/light');
 const WebSocket = require('ws');
 const {
   buildClientMetadata,
+  buildResourceVersionCandidates,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
@@ -19,6 +20,10 @@ const GREEN_GIFT_PRICE_GOLD = 15000;
 const GREEN_GIFT_MAX_COUNT_PER_GOODS = 4;
 const REVIVE_COIN_GOLD_BONUS = 18000;
 const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
+const CLIENT_VERSION_MISMATCH_CODE = 151;
+const HTTP_REQUEST_ATTEMPTS = 3;
+const HTTP_REQUEST_TIMEOUT_MS = 15000;
+const SESSION_BOOTSTRAP_ATTEMPTS = 3;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
 
 const DEFAULT_DEVICE = {
@@ -116,6 +121,27 @@ const fail = message => {
   throw new Error(message);
 };
 
+class MajsoulRpcError extends Error {
+  constructor(operation, response) {
+    const rpcCode = Number(response?.error?.code ?? 0);
+    super(`${operation} failed: ${JSON.stringify(response)}`);
+    this.name = 'MajsoulRpcError';
+    this.operation = operation;
+    this.rpcCode = rpcCode;
+    this.response = response;
+  }
+}
+
+function requireRpcSuccess(operation, response) {
+  const rpcCode = Number(response?.error?.code ?? 0);
+
+  if (rpcCode !== 0) {
+    throw new MajsoulRpcError(operation, response);
+  }
+
+  return response;
+}
+
 const must = (value, message) => value || fail(message);
 
 const normalizeBase = raw => {
@@ -136,6 +162,8 @@ const buildRandv = () => {
   const now = Date.now();
   return String(now + Math.floor(Math.random() * now));
 };
+
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 const hashCnPassword = password =>
   createHmac('sha256', 'lailai').update(password).digest('hex');
@@ -165,6 +193,45 @@ function getServerConfig(serverKey) {
   };
 }
 
+async function requestWithRetry(url, options = {}) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= HTTP_REQUEST_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+
+      if (response.ok) {
+        return response;
+      }
+
+      const error = new Error(`Request failed ${response.status} ${response.statusText} for ${url}`);
+      error.retryable = response.status === 429 || response.status >= 500;
+      throw error;
+    } catch (error) {
+      lastError = error;
+
+      if (error?.retryable === false || attempt === HTTP_REQUEST_ATTEMPTS) {
+        throw error;
+      }
+
+      console.warn(
+        `request attempt ${attempt}/${HTTP_REQUEST_ATTEMPTS} failed for ${url}: ${error?.message || error}`
+      );
+      await delay(500 * 2 ** (attempt - 1));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError;
+}
+
 async function requestJson(url, { body, headers, ...options } = {}) {
   const init = { ...options, headers };
 
@@ -180,21 +247,13 @@ async function requestJson(url, { body, headers, ...options } = {}) {
     }
   }
 
-  const response = await fetch(url, init);
-
-  if (!response.ok) {
-    fail(`Request failed ${response.status} ${response.statusText} for ${url}`);
-  }
+  const response = await requestWithRetry(url, init);
 
   return response.json();
 }
 
 async function requestText(url, options = {}) {
-  const response = await fetch(url, options);
-
-  if (!response.ok) {
-    fail(`Request failed ${response.status} ${response.statusText} for ${url}`);
-  }
+  const response = await requestWithRetry(url, options);
 
   return response.text();
 }
@@ -262,37 +321,25 @@ function saveSuccessfulResourceVersion(serverKey, resourceVersion) {
   console.log(`resource version cache saved -> ${serverKey}: ${resourceVersion}`);
 }
 
-function buildResourceVersionCandidates({ serverKey, detectedResourceVersion }) {
+function getResourceVersionCandidates({ serverKey, detectedResourceVersion }) {
   const cache = readResourceVersionCache();
   const cachedResourceVersion = cache[serverKey];
   const overrideResourceVersion = getOverrideResourceVersion();
 
-  const candidates = [];
-
-  if (cachedResourceVersion) {
-    candidates.push(cachedResourceVersion);
-  }
-
-  if (overrideResourceVersion) {
-    candidates.push(overrideResourceVersion);
-  }
-
-  if (detectedResourceVersion) {
-    candidates.push(detectedResourceVersion);
-  }
-
-  for (let patch = 260; patch >= 180; patch -= 1) {
-    candidates.push(`0.16.${patch}`);
-  }
-
-  candidates.push('0.16.193');
-
-  return [...new Set(candidates.filter(Boolean))];
+  return buildResourceVersionCandidates({
+    cachedResourceVersion,
+    detectedResourceVersion,
+    overrideResourceVersion
+  });
 }
 
 function isVersionStringError(error) {
   const message = error?.message || String(error);
-  return message.includes('version_str') || message.includes('client_version_string');
+  return (
+    Number(error?.rpcCode) === CLIENT_VERSION_MISMATCH_CODE ||
+    message.includes('version_str') ||
+    message.includes('client_version_string')
+  );
 }
 
 function buildRoutesUrl(gatewayUrl, version, lang) {
@@ -431,7 +478,7 @@ async function loadServerContext(server) {
     routeLang
   });
 
-  const resourceVersionCandidates = buildResourceVersionCandidates({
+  const resourceVersionCandidates = getResourceVersionCandidates({
     serverKey: server.key,
     detectedResourceVersion
   });
@@ -487,7 +534,14 @@ async function openChannel(endpoint, origin, Wrapper) {
   };
 
   await new Promise((resolve, reject) => {
+    const openTimeout = setTimeout(() => {
+      cleanup();
+      ws.terminate();
+      reject(new Error(`WebSocket connection timeout for ${endpoint}`));
+    }, 15000);
+
     const cleanup = () => {
+      clearTimeout(openTimeout);
       ws.removeListener('open', onOpen);
       ws.removeListener('error', onError);
     };
@@ -570,12 +624,29 @@ async function openChannel(endpoint, origin, Wrapper) {
     },
 
     async close() {
-      if (ws.readyState === WebSocket.CLOSED) {
+      if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
         return;
       }
 
       await new Promise(resolve => {
-        ws.once('close', resolve);
+        let settled = false;
+        let forceCloseTimeout;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          clearTimeout(forceCloseTimeout);
+          ws.removeListener('close', finish);
+          resolve();
+        };
+        forceCloseTimeout = setTimeout(() => {
+          ws.terminate();
+          finish();
+        }, 2000);
+
+        ws.once('close', finish);
         ws.close();
       });
     }
@@ -592,51 +663,74 @@ async function createSessionForRoute(context, route, credentials) {
   const channel = await openChannel(route.endpoint, server.origin, proto.Wrapper);
 
   const call = async (name, requestType, payload, responseType) => {
-    const wrapper = await channel.send(name, encode(requestType, payload));
-    return responseType ? responseType.decode(wrapper.data) : wrapper;
+    try {
+      const wrapper = await channel.send(name, encode(requestType, payload));
+      return responseType ? responseType.decode(wrapper.data) : wrapper;
+    } catch (error) {
+      await channel.close().catch(() => {});
+      throw error;
+    }
+  };
+
+  const requireSuccess = async (operation, response) => {
+    try {
+      return requireRpcSuccess(operation, response);
+    } catch (error) {
+      await channel.close().catch(() => {});
+      throw error;
+    }
   };
 
   const common = (name, responseType) => call(name, proto.ReqCommon, {}, responseType);
 
-  await call(
-    '.lq.Route.requestConnection',
-    proto.ReqRequestConnection,
-    {
-      type: 1,
-      route_id: route.id,
-      timestamp: Date.now()
-    },
-    proto.ResRequestConnection
+  await requireSuccess(
+    'requestConnection',
+    await call(
+      '.lq.Route.requestConnection',
+      proto.ReqRequestConnection,
+      {
+        type: 1,
+        route_id: route.id,
+        timestamp: Date.now()
+      },
+      proto.ResRequestConnection
+    )
   );
 
-  await call(
-    '.lq.Route.heartbeat',
-    proto.ReqHeartbeat,
-    {
-      delay: 0,
-      no_operation_counter: 0,
-      platform: 11,
-      network_quality: 0
-    },
-    proto.ResHeartbeat
+  await requireSuccess(
+    'heartbeat',
+    await call(
+      '.lq.Route.heartbeat',
+      proto.ReqHeartbeat,
+      {
+        delay: 0,
+        no_operation_counter: 0,
+        platform: 11,
+        network_quality: 0
+      },
+      proto.ResHeartbeat
+    )
   );
 
   if (server.loginMode === 'account_password') {
-    const loginResponse = await call(
-      '.lq.Lobby.login',
-      proto.ReqLogin,
-      buildPasswordLoginPayload({
-        account: email,
-        password: hashCnPassword(password),
-        device,
-        randomKey: randomUUID(),
-        clientVersion: clientMetadata.clientVersion,
-        clientVersionString: clientMetadata.clientVersionString,
-        currencyPlatforms: server.currencyPlatforms,
-        loginType: server.loginType,
-        tag: server.tag
-      }),
-      proto.ResOauth2Login
+    const loginResponse = await requireSuccess(
+      'login',
+      await call(
+        '.lq.Lobby.login',
+        proto.ReqLogin,
+        buildPasswordLoginPayload({
+          account: email,
+          password: hashCnPassword(password),
+          device,
+          randomKey: randomUUID(),
+          clientVersion: clientMetadata.clientVersion,
+          clientVersionString: clientMetadata.clientVersionString,
+          currencyPlatforms: server.currencyPlatforms,
+          loginType: server.loginType,
+          tag: server.tag
+        }),
+        proto.ResOauth2Login
+      )
     );
 
     if (!loginResponse.account) {
@@ -655,49 +749,58 @@ async function createSessionForRoute(context, route, credentials) {
   let accessToken = token;
 
   if (server.loginMode === 'oauth_code') {
-    const authResponse = await call(
-      '.lq.Lobby.oauth2Auth',
-      proto.ReqOauth2Auth,
-      buildOauth2AuthPayload({
-        oauthType: server.oauthType,
-        token,
-        uid,
-        clientVersionString: clientMetadata.clientVersionString
-      }),
-      proto.ResOauth2Auth
+    const authResponse = await requireSuccess(
+      'oauth2Auth',
+      await call(
+        '.lq.Lobby.oauth2Auth',
+        proto.ReqOauth2Auth,
+        buildOauth2AuthPayload({
+          oauthType: server.oauthType,
+          token,
+          uid,
+          clientVersionString: clientMetadata.clientVersionString
+        }),
+        proto.ResOauth2Auth
+      )
     );
 
     accessToken = must(authResponse?.access_token, `oauth2Auth failed: ${JSON.stringify(authResponse)}`);
   }
 
-  const checkResponse = await call(
-    '.lq.Lobby.oauth2Check',
-    proto.ReqOauth2Check,
-    {
-      type: server.oauthType,
-      access_token: accessToken
-    },
-    proto.ResOauth2Check
+  const checkResponse = await requireSuccess(
+    'oauth2Check',
+    await call(
+      '.lq.Lobby.oauth2Check',
+      proto.ReqOauth2Check,
+      {
+        type: server.oauthType,
+        access_token: accessToken
+      },
+      proto.ResOauth2Check
+    )
   );
 
   if (!checkResponse?.has_account) {
     fail(`oauth2Check failed: ${JSON.stringify(checkResponse)}`);
   }
 
-  const loginResponse = await call(
-    '.lq.Lobby.oauth2Login',
-    proto.ReqOauth2Login,
-    buildOauth2LoginPayload({
-      oauthType: server.oauthType,
-      accessToken,
-      device,
-      randomKey: randomUUID(),
-      clientVersion: clientMetadata.clientVersion,
-      clientVersionString: clientMetadata.clientVersionString,
-      currencyPlatforms: server.currencyPlatforms,
-      tag: server.tag
-    }),
-    proto.ResOauth2Login
+  const loginResponse = await requireSuccess(
+    'oauth2Login',
+    await call(
+      '.lq.Lobby.oauth2Login',
+      proto.ReqOauth2Login,
+      buildOauth2LoginPayload({
+        oauthType: server.oauthType,
+        accessToken,
+        device,
+        randomKey: randomUUID(),
+        clientVersion: clientMetadata.clientVersion,
+        clientVersionString: clientMetadata.clientVersionString,
+        currencyPlatforms: server.currencyPlatforms,
+        tag: server.tag
+      }),
+      proto.ResOauth2Login
+    )
   );
 
   if (!loginResponse.account) {
@@ -722,6 +825,10 @@ async function createSessionWithRoutes(context, credentials) {
     } catch (error) {
       errors.push({ route: route.id, message: error?.message || String(error) });
       console.warn(`gateway route ${route.id} failed: ${error?.message || error}`);
+
+      if (isVersionStringError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -754,6 +861,7 @@ async function createSession(context, credentials) {
       const message = error?.message || String(error);
 
       if (!isVersionStringError(error)) {
+        error.resourceVersion = resourceVersion;
         throw error;
       }
 
@@ -766,7 +874,9 @@ async function createSession(context, credentials) {
     }
   }
 
-  fail(`All resource version candidates failed: ${JSON.stringify(errors)}`);
+  const error = new Error(`All resource version candidates failed: ${JSON.stringify(errors)}`);
+  error.rpcCode = CLIENT_VERSION_MISMATCH_CODE;
+  throw error;
 }
 
 async function runActions(session) {
@@ -879,8 +989,33 @@ async function run() {
 
   console.log(`selected server: ${server.key}`);
 
-  const context = await loadServerContext(server);
-  const session = await createSession(context, credentials);
+  let session;
+
+  for (let attempt = 1; attempt <= SESSION_BOOTSTRAP_ATTEMPTS; attempt += 1) {
+    try {
+      const context = await loadServerContext(server);
+      session = await createSession(context, credentials);
+      break;
+    } catch (error) {
+      const shouldRetry =
+        !(error instanceof MajsoulRpcError) &&
+        !isVersionStringError(error) &&
+        attempt < SESSION_BOOTSTRAP_ATTEMPTS;
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `session bootstrap attempt ${attempt}/${SESSION_BOOTSTRAP_ATTEMPTS} failed: ${error?.message || error}`
+      );
+      await delay(1000 * 2 ** (attempt - 1));
+    }
+  }
+
+  if (!session) {
+    fail('Session bootstrap ended without a session.');
+  }
 
   try {
     await runActions(session);
@@ -899,8 +1034,12 @@ if (require.main === module) {
 module.exports = {
   createSession,
   getServerConfig,
+  getResourceVersionCandidates,
+  isVersionStringError,
   loadRuntimeConfig,
   loadServerContext,
+  MajsoulRpcError,
+  requireRpcSuccess,
   run,
   runActions
 };
