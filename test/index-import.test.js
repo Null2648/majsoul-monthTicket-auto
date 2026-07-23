@@ -10,7 +10,7 @@ test('src/index can be imported without starting the automation', () => {
   assert.equal(typeof index.runActions, 'function');
 });
 
-test('Majsoul error 151 is classified as a client version mismatch', () => {
+test('Majsoul oauth error 151 is reported as a rejected login token', () => {
   const {
     isVersionStringError,
     MajsoulRpcError,
@@ -26,11 +26,12 @@ test('Majsoul error 151 is classified as a client version mismatch', () => {
   try {
     requireRpcSuccess('oauth2Auth', response);
   } catch (error) {
-    assert.equal(isVersionStringError(error), true);
+    assert.equal(isVersionStringError(error), false);
+    assert.match(error.message, /Refresh the repository secrets UID and TOKEN/);
   }
 });
 
-test('unrelated Majsoul RPC errors are not treated as version mismatches', () => {
+test('explicit client version errors are treated as version mismatches', () => {
   const { isVersionStringError, requireRpcSuccess } = require('../src/index');
 
   try {
@@ -38,4 +39,9 @@ test('unrelated Majsoul RPC errors are not treated as version mismatches', () =>
   } catch (error) {
     assert.equal(isVersionStringError(error), false);
   }
+
+  assert.equal(
+    isVersionStringError(new Error('invalid client_version_string')),
+    true
+  );
 });

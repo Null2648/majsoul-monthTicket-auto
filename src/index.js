@@ -23,7 +23,6 @@ const GREEN_GIFT_PRICE_GOLD = 15000;
 const GREEN_GIFT_MAX_COUNT_PER_GOODS = 4;
 const REVIVE_COIN_GOLD_BONUS = 18000;
 const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
-const CLIENT_VERSION_MISMATCH_CODE = 151;
 const HTTP_REQUEST_ATTEMPTS = 3;
 const HTTP_REQUEST_TIMEOUT_MS = 15000;
 const CLIENT_SCRIPT_REQUEST_TIMEOUT_MS = 60000;
@@ -128,7 +127,11 @@ const fail = message => {
 class MajsoulRpcError extends Error {
   constructor(operation, response) {
     const rpcCode = Number(response?.error?.code ?? 0);
-    super(`${operation} failed: ${JSON.stringify(response)}`);
+    const credentialHint =
+      operation === 'oauth2Auth' && rpcCode === 151
+        ? ' The JP login token was rejected. Refresh the repository secrets UID and TOKEN from the current MahjongSoul web client.'
+        : '';
+    super(`${operation} failed: ${JSON.stringify(response)}${credentialHint}`);
     this.name = 'MajsoulRpcError';
     this.operation = operation;
     this.rpcCode = rpcCode;
@@ -374,7 +377,6 @@ function getClientVersionStringCandidates({
 function isVersionStringError(error) {
   const message = error?.message || String(error);
   return (
-    Number(error?.rpcCode) === CLIENT_VERSION_MISMATCH_CODE ||
     message.includes('version_str') ||
     message.includes('client_version_string')
   );
@@ -947,9 +949,7 @@ async function createSession(context, credentials) {
     }
   }
 
-  const error = new Error(`All resource version candidates failed: ${JSON.stringify(errors)}`);
-  error.rpcCode = CLIENT_VERSION_MISMATCH_CODE;
-  throw error;
+  throw new Error(`All client version candidates failed: ${JSON.stringify(errors)}`);
 }
 
 async function runActions(session) {

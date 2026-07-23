@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "probe:jp": "node scripts/probe-jp-client-version.js",
+    "check:jp": "node scripts/check-jp-client-metadata.js",
     "start": "node src/index.js",
     "test": "node --test"
   },

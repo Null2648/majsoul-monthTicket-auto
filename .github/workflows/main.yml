@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - main
-      - agent/fix-jp-client-version-rollover
     paths:
       - '.github/workflows/main.yml'
       - 'src/**'
@@ -53,9 +52,9 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Probe current JP client version
+      - name: Check current JP client metadata
         if: github.event_name == 'pull_request'
-        run: npm run probe:jp
+        run: npm run check:jp
 
       - name: Execute month ticket automation
         if: github.event_name != 'pull_request'
