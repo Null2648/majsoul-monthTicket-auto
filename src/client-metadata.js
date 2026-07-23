@@ -28,6 +28,16 @@ function normalizeClientVersionString(value) {
     : null;
 }
 
+function buildWebClientVersionString(resourceVersion) {
+  const normalized = normalizeResourceVersion(resourceVersion);
+
+  if (!parseResourceVersion(normalized)) {
+    throw new Error('A dotted resource version is required for the web client');
+  }
+
+  return `web-${normalized}`;
+}
+
 function extractClientVersionStrings(text) {
   return [
     ...new Set(
@@ -275,6 +285,7 @@ module.exports = {
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
+  buildWebClientVersionString,
   extractClientVersionStrings,
   normalizeClientVersionString,
   normalizeResourceVersion,
