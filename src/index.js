@@ -896,7 +896,7 @@ async function createSessionWithRoutes(context, credentials) {
       errors.push({ route: route.id, message: error?.message || String(error) });
       console.warn(`gateway route ${route.id} failed: ${error?.message || error}`);
 
-      if (isVersionStringError(error)) {
+      if (error instanceof MajsoulRpcError || isVersionStringError(error)) {
         throw error;
       }
     }
