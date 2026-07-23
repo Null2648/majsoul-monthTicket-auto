@@ -43,7 +43,8 @@ This project automates daily logins to Majsoul to achieve the attendance achieve
 ## Client update handling
 - Each run checks the small official `version.json` and Unity `productVersion` first.
 - If they are unchanged, the last successful client settings are reused immediately.
-- Unity `productVersion` is used for package and route metadata. The last successful authentication resource version remains the fast path; only an authentication error 151 after an update activates a bounded sequential recovery scan, and the successful value is cached for later runs.
+- Unity `productVersion` is used for package and route metadata. The last successful authentication resource version remains the fast path; only the official outdated-client error 150 activates a bounded sequential recovery scan, and the successful value is cached for later runs.
+- The route handshake mirrors the current Unity client, including its Web platform field and second-based timestamp. Login-queue error 151 refreshes the route/session instead of incorrectly scanning client versions.
 - The Unity client derives the authentication resource from `docs_version/version.json`; recovery alternates around the last successful value instead of assuming every update increments it.
 - The current Unity client no longer exposes the old `game`/`Laya` globals, so use the `test_sdk.Login` method above.
 

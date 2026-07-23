@@ -68,29 +68,70 @@ test('explicit client version errors are treated as version mismatches', () => {
   );
 });
 
-test('oauth2Auth code 151 can trigger bounded client version recovery', () => {
+test('oauth2Auth code 150 triggers version recovery while code 151 refreshes the route queue', () => {
   const {
+    isConnectionQueueError,
     isClientVersionProbeError,
     requireRpcSuccess
   } = require('../src/index');
 
-  let authError;
-  let checkError;
+  let outdatedClientError;
+  let missingQueueError;
+
+  try {
+    requireRpcSuccess('oauth2Auth', { error: { code: 150 } });
+  } catch (error) {
+    outdatedClientError = error;
+  }
 
   try {
     requireRpcSuccess('oauth2Auth', { error: { code: 151 } });
   } catch (error) {
-    authError = error;
+    missingQueueError = error;
   }
 
-  try {
-    requireRpcSuccess('oauth2Check', { error: { code: 151 } });
-  } catch (error) {
-    checkError = error;
-  }
+  assert.equal(isClientVersionProbeError(outdatedClientError), true);
+  assert.equal(isConnectionQueueError(outdatedClientError), false);
+  assert.equal(isClientVersionProbeError(missingQueueError), false);
+  assert.equal(isConnectionQueueError(missingQueueError), true);
+});
 
-  assert.equal(isClientVersionProbeError(authError), true);
-  assert.equal(isClientVersionProbeError(checkError), false);
+test('requestConnection matches the official Unity route handshake', () => {
+  const {
+    buildRequestConnectionPayload,
+    ensureRequestConnectionPlatformField
+  } = require('../src/index');
+  const liqiJson = {
+    nested: {
+      lq: {
+        nested: {
+          ReqRequestConnection: {
+            fields: {
+              type: { type: 'uint32', id: 2 },
+              route_id: { type: 'string', id: 3 },
+              timestamp: { type: 'uint64', id: 4 }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  ensureRequestConnectionPlatformField(liqiJson);
+
+  assert.deepEqual(
+    liqiJson.nested.lq.nested.ReqRequestConnection.fields.platform,
+    { type: 'string', id: 6 }
+  );
+  assert.deepEqual(
+    buildRequestConnectionPayload({ id: 'route-2' }, 1_753_376_523_987),
+    {
+      type: 1,
+      route_id: 'route-2',
+      timestamp: 1_753_376_523,
+      platform: 'Web'
+    }
+  );
 });
 
 test('alternate YoStar credentials are tried per version before scanning onward', () => {

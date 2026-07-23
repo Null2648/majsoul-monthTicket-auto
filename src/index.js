@@ -38,6 +38,7 @@ const SESSION_BOOTSTRAP_ATTEMPTS = 3;
 const MAX_CLIENT_VERSION_PROBES = 96;
 const CLIENT_VERSION_PROBE_DELAY_MS = 150;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
+const ROUTE_DETAIL_PLATFORM = 'Web';
 
 const DEFAULT_DEVICE = {
   platform: 'pc',
@@ -457,8 +458,16 @@ function isClientVersionProbeError(error) {
     (
       error instanceof MajsoulRpcError &&
       error.operation === 'oauth2Auth' &&
-      error.rpcCode === 151
+      error.rpcCode === 150
     )
+  );
+}
+
+function isConnectionQueueError(error) {
+  return (
+    error instanceof MajsoulRpcError &&
+    error.operation === 'oauth2Auth' &&
+    error.rpcCode === 151
   );
 }
 
@@ -486,12 +495,37 @@ function resolveClientVersionStrings({ productVersion } = {}) {
   return [unityPackageCandidate];
 }
 
+function ensureRequestConnectionPlatformField(liqiJson) {
+  const fields =
+    liqiJson?.nested?.lq?.nested?.ReqRequestConnection?.fields;
+
+  if (fields && !fields.platform) {
+    fields.platform = {
+      type: 'string',
+      id: 6
+    };
+    console.log('route protocol compatibility -> added official requestConnection.platform field');
+  }
+
+  return liqiJson;
+}
+
 function loadProtoTypes(liqiJson) {
+  ensureRequestConnectionPlatformField(liqiJson);
   const root = protobuf.Root.fromJSON(liqiJson);
 
   return Object.fromEntries(
     Object.entries(PROTO_TYPES).map(([key, typeName]) => [key, root.lookupType(typeName)])
   );
+}
+
+function buildRequestConnectionPayload(route, now = Date.now()) {
+  return {
+    type: 1,
+    route_id: route.id,
+    timestamp: Math.floor(now / 1000),
+    platform: ROUTE_DETAIL_PLATFORM
+  };
 }
 
 function encode(type, payload) {
@@ -789,11 +823,7 @@ async function createSessionForRoute(context, route, credentials) {
     await call(
       '.lq.Route.requestConnection',
       proto.ReqRequestConnection,
-      {
-        type: 1,
-        route_id: route.id,
-        timestamp: Date.now()
-      },
+      buildRequestConnectionPayload(route),
       proto.ResRequestConnection
     )
   );
@@ -960,18 +990,24 @@ async function createSessionForRoute(context, route, credentials) {
 
 async function createSessionWithRoutes(context, credentials) {
   const errors = [];
+  let lastError;
 
   for (const route of context.routes) {
     try {
       return await createSessionForRoute(context, route, credentials);
     } catch (error) {
+      lastError = error;
       errors.push({ route: route.id, message: error?.message || String(error) });
       console.warn(`gateway route ${route.id} failed: ${error?.message || error}`);
 
-      if (error instanceof MajsoulRpcError || isVersionStringError(error)) {
+      if (isClientVersionProbeError(error)) {
         throw error;
       }
     }
+  }
+
+  if (lastError instanceof MajsoulRpcError || isVersionStringError(lastError)) {
+    throw lastError;
   }
 
   fail(`All gateway routes failed: ${JSON.stringify(errors)}`);
@@ -1389,7 +1425,10 @@ async function run() {
     } catch (error) {
       const shouldRetry =
         error?.retryable !== false &&
-        !(error instanceof MajsoulRpcError) &&
+        (
+          !(error instanceof MajsoulRpcError) ||
+          isConnectionQueueError(error)
+        ) &&
         !isVersionStringError(error) &&
         attempt < SESSION_BOOTSTRAP_ATTEMPTS;
 
@@ -1424,10 +1463,13 @@ if (require.main === module) {
 
 module.exports = {
   buildClientAuthenticationAttempts,
+  buildRequestConnectionPayload,
   buildYostarCredentialCandidates,
   createSession,
+  ensureRequestConnectionPlatformField,
   getServerConfig,
   getClientVersionStringCandidates,
+  isConnectionQueueError,
   isClientVersionProbeError,
   isVersionStringError,
   loadRuntimeConfig,
