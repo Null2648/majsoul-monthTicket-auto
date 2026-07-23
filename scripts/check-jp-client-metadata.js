@@ -1,7 +1,4 @@
 const {
-  buildUnityWebGLClientVersionString
-} = require('../src/client-metadata');
-const {
   getServerConfig,
   loadServerContext
 } = require('../src/index');
@@ -9,9 +6,9 @@ const {
 async function check() {
   const server = getServerConfig('jp');
   const context = await loadServerContext(server);
-  const expectedClientVersionString =
-    buildUnityWebGLClientVersionString(context.productVersion);
-  const [currentClientVersionString] = context.clientVersionStringCandidates;
+  const productVersion = context.clientMetadata.routeVersion;
+  const expectedClientVersionString = `WebGL_2022-${productVersion}`;
+  const currentClientVersionString = context.clientMetadata.clientVersionString;
 
   if (currentClientVersionString !== expectedClientVersionString) {
     throw new Error(
@@ -20,7 +17,7 @@ async function check() {
   }
 
   console.log(
-    `JP client metadata is current: product=${context.productVersion}, resource=${context.version}, client=${currentClientVersionString}`
+    `JP client metadata is current: product=${productVersion}, resource=${context.clientMetadata.clientVersion.resource}, client=${currentClientVersionString}`
   );
 }
 
