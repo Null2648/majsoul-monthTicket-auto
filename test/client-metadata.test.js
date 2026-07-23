@@ -4,9 +4,15 @@ const test = require('node:test');
 const {
   DEFAULT_RESOURCE_VERSION,
   buildClientMetadata,
+  buildClientVersionStringCandidates,
+  buildResourceVersionCandidates,
   buildPasswordLoginPayload,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
+  extractClientVersionStrings,
+  normalizeClientVersionString,
+  normalizeResourceVersion,
+  parseResourceVersion,
   parseProductVersion
 } = require('../src/client-metadata');
 
@@ -37,6 +43,100 @@ test('buildClientMetadata falls back to current default resource version', () =>
 
   assert.equal(metadata.clientVersion.resource, DEFAULT_RESOURCE_VERSION);
   assert.equal(metadata.clientVersionString, `WebGL_2022-${DEFAULT_RESOURCE_VERSION}`);
+});
+
+test('official client version strings are extracted without guessing their prefix', () => {
+  const script = [
+    'const oldVersion = "WebGL_2022-0.16.260";',
+    'const currentVersion = "WebGL_2023-0.18.7";',
+    'const duplicate = "WebGL_2023-0.18.7";'
+  ].join('\n');
+
+  assert.deepEqual(extractClientVersionStrings(script), [
+    'WebGL_2022-0.16.260',
+    'WebGL_2023-0.18.7'
+  ]);
+  assert.equal(normalizeClientVersionString('WebGL_2023-0.18.7'), 'WebGL_2023-0.18.7');
+  assert.equal(normalizeClientVersionString('desktop-0.18.7'), null);
+});
+
+test('exact detected client strings are tried before cached scan candidates', () => {
+  const candidates = buildClientVersionStringCandidates({
+    overrideClientVersionString: 'WebGL_2024-0.19.1',
+    detectedClientVersionStrings: ['WebGL_2023-0.18.7'],
+    cachedClientVersionString: 'WebGL_2022-0.16.260',
+    resourceVersionCandidates: ['0.16.260', '0.16.261'],
+    webResourceVersion: '0.11.252.w'
+  });
+
+  assert.deepEqual(candidates, [
+    'WebGL_2024-0.19.1',
+    'WebGL_2023-0.18.7',
+    'web-0.11.252',
+    'WebGL_2022-0.16.260',
+    'WebGL_2022-0.16.261'
+  ]);
+});
+
+test('buildClientMetadata preserves an exact client string discovered in official assets', () => {
+  const metadata = buildClientMetadata({
+    productVersion: '4.0.11',
+    clientVersionString: 'WebGL_2023-0.18.7'
+  });
+
+  assert.deepEqual(metadata, {
+    routeVersion: '4.0.11',
+    clientVersion: {
+      resource: '0.18.7',
+      package: '4.0.11'
+    },
+    clientVersionString: 'WebGL_2023-0.18.7'
+  });
+});
+
+test('resource version candidates continue forward from the newest known version', () => {
+  const candidates = buildResourceVersionCandidates({
+    cachedResourceVersion: '0.16.260',
+    detectedResourceVersion: '0.16.258',
+    forwardScanLimit: 3,
+    nextMinorScanLimit: 1,
+    backwardScanLimit: 1
+  });
+
+  assert.deepEqual(candidates.slice(0, 6), [
+    '0.16.258',
+    '0.16.260',
+    '0.16.261',
+    '0.16.262',
+    '0.16.263',
+    '0.17.0'
+  ]);
+  assert.ok(candidates.includes('0.17.1'));
+  assert.ok(candidates.includes('0.16.259'));
+});
+
+test('resource version candidates normalize WebGL prefixes and remove duplicates', () => {
+  const candidates = buildResourceVersionCandidates({
+    overrideResourceVersion: 'WebGL_2022-0.16.261',
+    detectedResourceVersion: 'v0.16.261',
+    cachedResourceVersion: '0.16.260',
+    forwardScanLimit: 1,
+    nextMinorScanLimit: 0,
+    backwardScanLimit: 0
+  });
+
+  assert.deepEqual(candidates.slice(0, 3), [
+    '0.16.261',
+    '0.16.260',
+    '0.16.262'
+  ]);
+});
+
+test('resource version parsing rejects malformed values', () => {
+  assert.equal(normalizeResourceVersion('WebGL_2022-0.16.261'), '0.16.261');
+  assert.deepEqual(parseResourceVersion('0.16.261'), [0, 16, 261]);
+  assert.equal(parseResourceVersion('0.16'), null);
+  assert.equal(parseResourceVersion('latest'), null);
 });
 
 test('buildOauth2AuthPayload sends Yostar token as code with current client version string', () => {

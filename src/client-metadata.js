@@ -1,4 +1,7 @@
 const DEFAULT_RESOURCE_VERSION = '0.16.193';
+const DEFAULT_FORWARD_SCAN_LIMIT = 128;
+const DEFAULT_NEXT_MINOR_SCAN_LIMIT = 32;
+const DEFAULT_BACKWARD_SCAN_LIMIT = 16;
 
 function parseProductVersion(html) {
   const match = String(html || '').match(/productVersion\s*:\s*["']([^"']+)["']/);
@@ -11,18 +14,166 @@ function parseProductVersion(html) {
 function normalizeResourceVersion(value) {
   return String(value || '')
     .trim()
-    .replace(/^WebGL_2022-/, '')
+    .replace(/^WebGL_\d{4}-/, '')
     .replace(/^web-/, '')
     .replace(/^v/, '')
     .replace(/\.w$/, '');
 }
 
-function buildClientMetadata({ productVersion, resourceVersion = DEFAULT_RESOURCE_VERSION }) {
+function normalizeClientVersionString(value) {
+  const normalized = String(value || '').trim();
+
+  return /^(?:WebGL_\d{4}|web)-\d+\.\d+\.\d+$/.test(normalized)
+    ? normalized
+    : null;
+}
+
+function extractClientVersionStrings(text) {
+  return [
+    ...new Set(
+      [...String(text || '').matchAll(/\b(?:WebGL_\d{4}|web)-\d+\.\d+\.\d+\b/g)]
+        .map(match => match[0])
+    )
+  ];
+}
+
+function parseResourceVersion(value) {
+  const normalized = normalizeResourceVersion(value);
+  const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return match.slice(1).map(Number);
+}
+
+function formatResourceVersion(parts) {
+  return parts.join('.');
+}
+
+function compareResourceVersions(a, b) {
+  const parsedA = parseResourceVersion(a);
+  const parsedB = parseResourceVersion(b);
+
+  if (!parsedA || !parsedB) {
+    return String(a).localeCompare(String(b));
+  }
+
+  for (let index = 0; index < parsedA.length; index += 1) {
+    if (parsedA[index] !== parsedB[index]) {
+      return parsedA[index] - parsedB[index];
+    }
+  }
+
+  return 0;
+}
+
+function buildResourceVersionCandidates({
+  overrideResourceVersion,
+  detectedResourceVersion,
+  cachedResourceVersion,
+  defaultResourceVersion = DEFAULT_RESOURCE_VERSION,
+  forwardScanLimit = DEFAULT_FORWARD_SCAN_LIMIT,
+  nextMinorScanLimit = DEFAULT_NEXT_MINOR_SCAN_LIMIT,
+  backwardScanLimit = DEFAULT_BACKWARD_SCAN_LIMIT
+} = {}) {
+  const candidates = [];
+  const addCandidate = value => {
+    const normalized = normalizeResourceVersion(value);
+
+    if (parseResourceVersion(normalized) && !candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  };
+
+  const knownVersions = [
+    overrideResourceVersion,
+    detectedResourceVersion,
+    cachedResourceVersion
+  ];
+
+  knownVersions.forEach(addCandidate);
+
+  if (!candidates.length) {
+    addCandidate(defaultResourceVersion);
+  }
+
+  const scanBase = [...knownVersions, ...candidates]
+    .map(normalizeResourceVersion)
+    .filter(parseResourceVersion)
+    .sort(compareResourceVersions)
+    .at(-1);
+  const parsedBase = parseResourceVersion(scanBase);
+
+  if (!parsedBase) {
+    return candidates;
+  }
+
+  const [major, minor, patch] = parsedBase;
+
+  for (let offset = 1; offset <= forwardScanLimit; offset += 1) {
+    addCandidate(formatResourceVersion([major, minor, patch + offset]));
+  }
+
+  for (let nextPatch = 0; nextPatch <= nextMinorScanLimit; nextPatch += 1) {
+    addCandidate(formatResourceVersion([major, minor + 1, nextPatch]));
+  }
+
+  for (let offset = 1; offset <= backwardScanLimit && patch - offset >= 0; offset += 1) {
+    addCandidate(formatResourceVersion([major, minor, patch - offset]));
+  }
+
+  return candidates;
+}
+
+function buildClientVersionStringCandidates({
+  overrideClientVersionString,
+  detectedClientVersionStrings = [],
+  cachedClientVersionString,
+  resourceVersionCandidates = [],
+  webResourceVersion
+} = {}) {
+  const candidates = [];
+  const addCandidate = value => {
+    const normalized = normalizeClientVersionString(value);
+
+    if (normalized && !candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  };
+
+  addCandidate(overrideClientVersionString);
+  detectedClientVersionStrings.forEach(addCandidate);
+
+  if (webResourceVersion) {
+    addCandidate(`web-${normalizeResourceVersion(webResourceVersion)}`);
+  }
+
+  addCandidate(cachedClientVersionString);
+  resourceVersionCandidates.forEach(resourceVersion => {
+    addCandidate(`WebGL_2022-${normalizeResourceVersion(resourceVersion)}`);
+  });
+
+  return candidates;
+}
+
+function buildClientMetadata({
+  productVersion,
+  resourceVersion = DEFAULT_RESOURCE_VERSION,
+  clientVersionString
+}) {
   if (!productVersion) {
     throw new Error('productVersion is required');
   }
 
-  const resolvedResourceVersion = normalizeResourceVersion(resourceVersion);
+  const resolvedClientVersionString =
+    normalizeClientVersionString(clientVersionString) ||
+    `WebGL_2022-${normalizeResourceVersion(resourceVersion)}`;
+  const resolvedResourceVersion = normalizeResourceVersion(
+    clientVersionString || resourceVersion
+  );
+
   if (!resolvedResourceVersion) {
     throw new Error('resourceVersion is required');
   }
@@ -33,7 +184,7 @@ function buildClientMetadata({ productVersion, resourceVersion = DEFAULT_RESOURC
       resource: resolvedResourceVersion,
       package: productVersion
     },
-    clientVersionString: `WebGL_2022-${resolvedResourceVersion}`
+    clientVersionString: resolvedClientVersionString
   };
 }
 
@@ -98,8 +249,14 @@ function buildPasswordLoginPayload({
 module.exports = {
   DEFAULT_RESOURCE_VERSION,
   buildClientMetadata,
+  buildClientVersionStringCandidates,
+  buildResourceVersionCandidates,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
+  extractClientVersionStrings,
+  normalizeClientVersionString,
+  normalizeResourceVersion,
+  parseResourceVersion,
   parseProductVersion
 };
