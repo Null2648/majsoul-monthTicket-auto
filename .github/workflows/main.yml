@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - main
+      - agent/fix-jp-client-version-rollover
     paths:
       - '.github/workflows/main.yml'
       - 'src/**'

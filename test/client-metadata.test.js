@@ -72,9 +72,9 @@ test('exact detected client strings are tried before cached scan candidates', ()
   assert.deepEqual(candidates, [
     'WebGL_2024-0.19.1',
     'WebGL_2023-0.18.7',
+    'web-0.11.252',
     'WebGL_2022-0.16.260',
-    'WebGL_2022-0.16.261',
-    'web-0.11.252'
+    'WebGL_2022-0.16.261'
   ]);
 });
 

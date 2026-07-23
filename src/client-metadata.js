@@ -145,14 +145,15 @@ function buildClientVersionStringCandidates({
 
   addCandidate(overrideClientVersionString);
   detectedClientVersionStrings.forEach(addCandidate);
-  addCandidate(cachedClientVersionString);
-  resourceVersionCandidates.forEach(resourceVersion => {
-    addCandidate(`WebGL_2022-${normalizeResourceVersion(resourceVersion)}`);
-  });
 
   if (webResourceVersion) {
     addCandidate(`web-${normalizeResourceVersion(webResourceVersion)}`);
   }
+
+  addCandidate(cachedClientVersionString);
+  resourceVersionCandidates.forEach(resourceVersion => {
+    addCandidate(`WebGL_2022-${normalizeResourceVersion(resourceVersion)}`);
+  });
 
   return candidates;
 }

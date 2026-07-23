@@ -417,7 +417,8 @@ async function resolveClientVersionStrings(
     sources.push({
       name: 'official client script',
       url: clientScriptUrl,
-      timeoutMs: CLIENT_SCRIPT_REQUEST_TIMEOUT_MS
+      timeoutMs: CLIENT_SCRIPT_REQUEST_TIMEOUT_MS,
+      allowResourceFallback: false
     });
   }
 
@@ -454,7 +455,9 @@ async function resolveClientVersionStrings(
         return clientVersionStrings;
       }
 
-      const resourceVersion = extractResourceVersion(text);
+      const resourceVersion = source.allowResourceFallback === false
+        ? null
+        : extractResourceVersion(text);
 
       if (resourceVersion) {
         console.log(`resource version auto-detected from ${source.name} -> ${resourceVersion}`);
