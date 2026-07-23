@@ -13,14 +13,12 @@
 3. 아래 코드를 실행합니다.
    ```js
    {
-     const accessToken =
-       game.LoginMgr.access_token ||
-       Laya.LocalStorage.getItem('ssssoooodd');
-     if (!accessToken) throw new Error('먼저 작혼에 로그인하세요.');
-     console.log(`ACCESS_TOKEN: ${accessToken}`);
+     const r = await test_sdk.Login({ openQuickLogin: true });
+     if (r.code !== 0) throw new Error(`${r.code}: ${r.msg}`);
+     console.log(`UID: ${r.data.LOGIN_UID}\nTOKEN: ${r.data.LOGIN_TOKEN}`);
    }
    ```
-4. 출력된 `ACCESS_TOKEN` 값을 기록한 뒤 JP/EN/KR 서버 설정에 사용합니다. 게임 로딩과 로그인이 모두 끝난 상태에서 실행해야 합니다.
+4. 출력된 `UID`와 `TOKEN` 값을 기록한 뒤 JP/EN/KR 서버 설정에 사용합니다. `test_sdk`가 없다고 나오면 게임 로딩이 끝난 뒤 다시 실행합니다.
 5. CN 서버는 계정의 이메일과 비밀번호를 기억하시면 됩니다.
 
 ## 설정 방법
@@ -28,7 +26,7 @@
 2. 포크한 저장소에서 `Settings > Secrets and variables > Actions`로 이동합니다.
 3. `New repository secret` 버튼을 눌러 `MS_SERVER` 시크릿을 추가합니다.
 4. `MS_SERVER` 값은 사용할 서버에 따라 `jp`, `en`, `kr`, `cn` 중 하나를 입력합니다. 입력하지 않으면 기본값은 `jp`입니다.
-5. `jp`, `en`, `kr` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `ACCESS_TOKEN` 시크릿을 추가합니다. 기존 `UID`와 `TOKEN` 로그인 코드 방식도 예비 경로로 계속 지원합니다.
+5. `jp`, `en`, `kr` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `UID`와 `TOKEN` 시크릿을 추가합니다. 기존 `ACCESS_TOKEN` 시크릿이 있으면 먼저 재사용하고, 거부될 때 `UID`와 `TOKEN`으로 자동 재인증합니다.
 6. `cn` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `EMAIL`과 `PASSWORD` 시크릿을 추가합니다. 값에는 계정 이메일과 비밀번호 원문을 입력합니다.
 7. `Settings > Actions > General`로 이동해 `Workflow permissions`를 `Read and write permissions`로 변경합니다.
 8. 기본 실행 시각은 매일 JST 기준 오전 6시 05분입니다. 변경하려면 `.github/workflows/main.yml`의 `cron` 값을 수정합니다.
@@ -41,9 +39,10 @@
 3. 올바르게 동작하면 브라우저 세션이 서버에 의해 종료됩니다.
 
 ## 클라이언트 업데이트 처리
-- 매 실행 시 용량이 작은 공식 `version.json`과 제품 버전만 먼저 확인합니다.
+- 매 실행 시 용량이 작은 공식 `version.json`과 Unity `productVersion`만 먼저 확인합니다.
 - 변경이 없으면 직전에 성공한 클라이언트 설정을 즉시 재사용합니다.
-- 업데이트가 감지되면 공식 버전 정보를 다시 수집하고, 로그인 성공이 확인된 새 설정만 캐시에 저장합니다.
+- 업데이트가 감지되면 공식 Unity 규칙에 따라 `WebGL_2022-${productVersion}` 값을 자동 생성하고, 로그인 성공이 확인된 새 설정만 캐시에 저장합니다.
+- 현재 Unity 클라이언트에는 예전 `game`/`Laya` 전역 객체가 없으므로 위의 `test_sdk.Login` 방법을 사용해야 합니다.
 
 ## 주의
 - GitHub Actions는 서버 상황에 따라 최대 30분까지 지연될 수 있습니다.
