@@ -12,6 +12,7 @@ const {
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
+  buildWebClientVersionString,
   extractClientVersionStrings,
   normalizeResourceVersion,
   parseProductVersion
@@ -127,11 +128,7 @@ const fail = message => {
 class MajsoulRpcError extends Error {
   constructor(operation, response) {
     const rpcCode = Number(response?.error?.code ?? 0);
-    const credentialHint =
-      operation === 'oauth2Auth' && rpcCode === 151
-        ? ' The YoStar login code was rejected. Save the current game.LoginMgr.access_token as the repository secret ACCESS_TOKEN (or TOKEN).'
-        : '';
-    super(`${operation} failed: ${JSON.stringify(response)}${credentialHint}`);
+    super(`${operation} failed: ${JSON.stringify(response)}`);
     this.name = 'MajsoulRpcError';
     this.operation = operation;
     this.rpcCode = rpcCode;
@@ -445,8 +442,16 @@ function buildUpgradeInfoUrl(gatewayUrl, version, lang) {
 
 async function resolveClientVersionStrings(
   server,
-  { clientScriptUrl, gatewayUrl, productVersion, routeLang } = {}
+  { clientScriptUrl, gatewayUrl, productVersion, resourceVersion, routeLang } = {}
 ) {
+  if (server.key === 'jp' && resourceVersion) {
+    const officialClientVersionString = buildWebClientVersionString(resourceVersion);
+    console.log(
+      `official JP web metadata -> resource=${resourceVersion} client_version_string=${officialClientVersionString}`
+    );
+    return [officialClientVersionString];
+  }
+
   const sources = [];
 
   if (clientScriptUrl) {
@@ -587,6 +592,7 @@ async function loadServerContext(server) {
       clientScriptUrl,
       gatewayUrl,
       productVersion,
+      resourceVersion: version,
       routeLang
     });
   }
@@ -884,10 +890,21 @@ async function createSessionForRoute(context, route, credentials) {
 
   if (accessToken) {
     console.log('using configured MahjongSoul access token');
-    checkResponse = await requireSuccess(
-      'oauth2Check',
-      await requestOauth2Check(accessToken)
-    );
+    const configuredCheckResponse = await requestOauth2Check(accessToken);
+
+    if (
+      shouldRetryWithOauthCode(configuredCheckResponse, {
+        uid,
+        token
+      })
+    ) {
+      console.warn(
+        'configured access token was not accepted -> retrying the official UID/TOKEN login flow'
+      );
+      accessToken = null;
+    } else {
+      checkResponse = await requireSuccess('oauth2Check', configuredCheckResponse);
+    }
   } else if (server.loginMode === 'oauth_code') {
     const directCheckResponse = await requestOauth2Check(token);
     const directCheckCode = Number(directCheckResponse?.error?.code ?? 0);
@@ -982,8 +999,13 @@ async function createSessionWithRoutes(context, credentials) {
 
 async function createSession(context, credentials) {
   const errors = [];
+  const officialClientVersionString =
+    context.server.key === 'jp'
+      ? buildWebClientVersionString(context.version)
+      : null;
 
-  for (const clientVersionString of context.clientVersionStringCandidates) {
+  for (let index = 0; index < context.clientVersionStringCandidates.length; index += 1) {
+    const clientVersionString = context.clientVersionStringCandidates[index];
     const clientMetadata = buildClientMetadata({
       productVersion: context.productVersion,
       resourceVersion: context.version,
@@ -1014,7 +1036,16 @@ async function createSession(context, credentials) {
     } catch (error) {
       const message = error?.message || String(error);
 
-      if (!isVersionStringError(error)) {
+      const canRetryOfficialClientVersion =
+        error instanceof MajsoulRpcError &&
+        error.operation === 'oauth2Auth' &&
+        error.rpcCode === 151 &&
+        clientVersionString !== officialClientVersionString &&
+        context.clientVersionStringCandidates
+          .slice(index + 1)
+          .includes(officialClientVersionString);
+
+      if (!isVersionStringError(error) && !canRetryOfficialClientVersion) {
         error.resourceVersion = clientMetadata.clientVersion.resource;
         error.clientVersionString = clientMetadata.clientVersionString;
         throw error;
@@ -1025,7 +1056,11 @@ async function createSession(context, credentials) {
         message
       });
 
-      console.warn(`client version failed: ${clientMetadata.clientVersionString}`);
+      console.warn(
+        `client version failed: ${clientMetadata.clientVersionString}${
+          canRetryOfficialClientVersion ? ' -> retrying official JP web metadata' : ''
+        }`
+      );
     }
   }
 
@@ -1138,6 +1173,13 @@ function loadRuntimeConfig() {
   };
 }
 
+function shouldRetryWithOauthCode(checkResponse, { uid, token } = {}) {
+  const rpcCode = Number(checkResponse?.error?.code ?? 0);
+  const accessTokenIsUsable = rpcCode === 0 && checkResponse?.has_account;
+
+  return Boolean(uid && token && !accessTokenIsUsable);
+}
+
 async function run() {
   const credentials = loadRuntimeConfig();
   const { server } = credentials;
@@ -1196,5 +1238,6 @@ module.exports = {
   MajsoulRpcError,
   requireRpcSuccess,
   run,
-  runActions
+  runActions,
+  shouldRetryWithOauthCode
 };

@@ -9,6 +9,7 @@ const {
   buildPasswordLoginPayload,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
+  buildWebClientVersionString,
   extractClientVersionStrings,
   normalizeClientVersionString,
   normalizeResourceVersion,
@@ -124,6 +125,15 @@ test('current web metadata matches the official JP login payload', () => {
     },
     clientVersionString: 'web-0.11.252'
   });
+});
+
+test('official JP web client string is derived from version.json resource metadata', () => {
+  assert.equal(buildWebClientVersionString('0.11.252.w'), 'web-0.11.252');
+  assert.equal(buildWebClientVersionString('v0.12.3.w'), 'web-0.12.3');
+  assert.throws(
+    () => buildWebClientVersionString('latest'),
+    /dotted resource version/
+  );
 });
 
 test('resource version candidates continue forward from the newest known version', () => {
