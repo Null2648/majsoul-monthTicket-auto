@@ -129,7 +129,7 @@ class MajsoulRpcError extends Error {
     const rpcCode = Number(response?.error?.code ?? 0);
     const credentialHint =
       operation === 'oauth2Auth' && rpcCode === 151
-        ? ' The JP login token was rejected. Refresh the repository secrets UID and TOKEN from the current MahjongSoul web client.'
+        ? ' The YoStar login code was rejected. Save the current game.LoginMgr.access_token as the repository secret ACCESS_TOKEN (or TOKEN).'
         : '';
     super(`${operation} failed: ${JSON.stringify(response)}${credentialHint}`);
     this.name = 'MajsoulRpcError';
@@ -317,8 +317,16 @@ function readResourceVersionCache() {
   }
 }
 
-function saveSuccessfulClientVersion(serverKey, resourceVersion, clientVersionString) {
-  if (!serverKey || !resourceVersion || !clientVersionString) {
+function saveSuccessfulClientVersion(
+  serverKey,
+  {
+    resourceVersion,
+    clientVersionString,
+    sourceVersion,
+    productVersion
+  }
+) {
+  if (!serverKey || !resourceVersion || !clientVersionString || !sourceVersion || !productVersion) {
     return;
   }
 
@@ -326,7 +334,9 @@ function saveSuccessfulClientVersion(serverKey, resourceVersion, clientVersionSt
 
   if (
     cache[serverKey] === resourceVersion &&
-    cache.clientVersionStrings?.[serverKey] === clientVersionString
+    cache.clientVersionStrings?.[serverKey] === clientVersionString &&
+    cache.sourceVersions?.[serverKey] === sourceVersion &&
+    cache.productVersions?.[serverKey] === productVersion
   ) {
     return;
   }
@@ -335,6 +345,14 @@ function saveSuccessfulClientVersion(serverKey, resourceVersion, clientVersionSt
   cache.clientVersionStrings = {
     ...cache.clientVersionStrings,
     [serverKey]: clientVersionString
+  };
+  cache.sourceVersions = {
+    ...cache.sourceVersions,
+    [serverKey]: sourceVersion
+  };
+  cache.productVersions = {
+    ...cache.productVersions,
+    [serverKey]: productVersion
   };
   cache.updatedAt = new Date().toISOString();
 
@@ -345,10 +363,21 @@ function saveSuccessfulClientVersion(serverKey, resourceVersion, clientVersionSt
   );
 }
 
+function isClientMetadataCacheCurrent(serverKey, sourceVersion, productVersion) {
+  const cache = readResourceVersionCache();
+
+  return (
+    cache.sourceVersions?.[serverKey] === sourceVersion &&
+    cache.productVersions?.[serverKey] === productVersion &&
+    Boolean(cache.clientVersionStrings?.[serverKey])
+  );
+}
+
 function getClientVersionStringCandidates({
   serverKey,
-  detectedClientVersionStrings,
-  webResourceVersion
+  detectedClientVersionStrings = [],
+  webResourceVersion,
+  productVersion
 }) {
   const cache = readResourceVersionCache();
   const cachedResourceVersion = cache[serverKey];
@@ -370,7 +399,12 @@ function getClientVersionStringCandidates({
     detectedClientVersionStrings,
     cachedClientVersionString,
     resourceVersionCandidates,
-    webResourceVersion
+    webResourceVersion,
+    preferCachedClientVersion: isClientMetadataCacheCurrent(
+      serverKey,
+      webResourceVersion,
+      productVersion
+    )
   });
 }
 
@@ -538,17 +572,30 @@ async function loadServerContext(server) {
     'Gateway URL missing from config'
   ).replace(/\/+$/, '');
 
-  const detectedClientVersionStrings = await resolveClientVersionStrings(server, {
-    clientScriptUrl,
-    gatewayUrl,
-    productVersion,
-    routeLang
-  });
+  const cacheIsCurrent = isClientMetadataCacheCurrent(
+    server.key,
+    version,
+    productVersion
+  );
+  let detectedClientVersionStrings = [];
+
+  if (cacheIsCurrent) {
+    console.log('client metadata unchanged -> using the last successful cached settings');
+  } else {
+    console.log('client metadata update detected -> refreshing official version sources');
+    detectedClientVersionStrings = await resolveClientVersionStrings(server, {
+      clientScriptUrl,
+      gatewayUrl,
+      productVersion,
+      routeLang
+    });
+  }
 
   const clientVersionStringCandidates = getClientVersionStringCandidates({
     serverKey: server.key,
     detectedClientVersionStrings,
-    webResourceVersion: version
+    webResourceVersion: version,
+    productVersion
   });
 
   console.log(`version.json -> version=${version} force_version=${versionInfo.force_version} code=${versionInfo.code}`);
@@ -725,7 +772,13 @@ async function openChannel(endpoint, origin, Wrapper) {
 
 async function createSessionForRoute(context, route, credentials) {
   const { server, proto, clientMetadata } = context;
-  const { uid, token, email, password } = credentials;
+  const {
+    uid,
+    token,
+    accessToken: configuredAccessToken,
+    email,
+    password
+  } = credentials;
   const device = buildDevice(server);
 
   console.log(`trying gateway route ${route.id}: ${route.endpoint}`);
@@ -816,9 +869,37 @@ async function createSessionForRoute(context, route, credentials) {
     };
   }
 
-  let accessToken = token;
+  const requestOauth2Check = accessToken => call(
+    '.lq.Lobby.oauth2Check',
+    proto.ReqOauth2Check,
+    {
+      type: server.oauthType,
+      access_token: accessToken
+    },
+    proto.ResOauth2Check
+  );
 
-  if (server.loginMode === 'oauth_code') {
+  let accessToken = configuredAccessToken;
+  let checkResponse;
+
+  if (accessToken) {
+    console.log('using configured MahjongSoul access token');
+    checkResponse = await requireSuccess(
+      'oauth2Check',
+      await requestOauth2Check(accessToken)
+    );
+  } else if (server.loginMode === 'oauth_code') {
+    const directCheckResponse = await requestOauth2Check(token);
+    const directCheckCode = Number(directCheckResponse?.error?.code ?? 0);
+
+    if (directCheckCode === 0 && directCheckResponse?.has_account) {
+      console.log('TOKEN contains a reusable MahjongSoul access token');
+      accessToken = token;
+      checkResponse = directCheckResponse;
+    }
+  }
+
+  if (!accessToken && server.loginMode === 'oauth_code') {
     const authResponse = await requireSuccess(
       'oauth2Auth',
       await call(
@@ -837,18 +918,12 @@ async function createSessionForRoute(context, route, credentials) {
     accessToken = must(authResponse?.access_token, `oauth2Auth failed: ${JSON.stringify(authResponse)}`);
   }
 
-  const checkResponse = await requireSuccess(
-    'oauth2Check',
-    await call(
-      '.lq.Lobby.oauth2Check',
-      proto.ReqOauth2Check,
-      {
-        type: server.oauthType,
-        access_token: accessToken
-      },
-      proto.ResOauth2Check
-    )
-  );
+  if (!checkResponse) {
+    checkResponse = await requireSuccess(
+      'oauth2Check',
+      await requestOauth2Check(accessToken)
+    );
+  }
 
   if (!checkResponse?.has_account) {
     fail(`oauth2Check failed: ${JSON.stringify(checkResponse)}`);
@@ -911,6 +986,7 @@ async function createSession(context, credentials) {
   for (const clientVersionString of context.clientVersionStringCandidates) {
     const clientMetadata = buildClientMetadata({
       productVersion: context.productVersion,
+      resourceVersion: context.version,
       clientVersionString
     });
 
@@ -927,8 +1003,12 @@ async function createSession(context, credentials) {
       const session = await createSessionWithRoutes(candidateContext, credentials);
       saveSuccessfulClientVersion(
         context.server.key,
-        clientMetadata.clientVersion.resource,
-        clientMetadata.clientVersionString
+        {
+          resourceVersion: clientMetadata.clientVersion.resource,
+          clientVersionString: clientMetadata.clientVersionString,
+          sourceVersion: context.version,
+          productVersion: context.productVersion
+        }
       );
       return session;
     } catch (error) {
@@ -1036,6 +1116,7 @@ function loadRuntimeConfig() {
   const server = getServerConfig(process.env.MS_SERVER);
   const uid = process.env.UID;
   const token = process.env.TOKEN;
+  const accessToken = process.env.ACCESS_TOKEN;
   const email = process.env.EMAIL;
   const password = process.env.PASSWORD;
 
@@ -1043,13 +1124,14 @@ function loadRuntimeConfig() {
     if (!email || !password) {
       fail('EMAIL and PASSWORD environment variables are required for CN server.');
     }
-  } else if (!uid || !token) {
-    fail('UID and TOKEN environment variables are required for JP/EN/KR servers.');
+  } else if (!accessToken && (!uid || !token)) {
+    fail('Set ACCESS_TOKEN, or both UID and TOKEN, for JP/EN/KR servers.');
   }
 
   return {
     uid,
     token,
+    accessToken,
     email,
     password,
     server
