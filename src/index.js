@@ -1,19 +1,13 @@
 require('dotenv').config();
 
-const fs = require('node:fs');
-const path = require('node:path');
 const { createHmac, randomUUID } = require('node:crypto');
 const protobuf = require('protobufjs/light');
 const WebSocket = require('ws');
 const {
   buildClientMetadata,
-  buildClientVersionStringCandidates,
-  buildResourceVersionCandidates,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
-  buildUnityWebGLClientVersionString,
-  normalizeResourceVersion,
   parseProductVersion
 } = require('./client-metadata');
 
@@ -23,13 +17,6 @@ const GREEN_GIFT_PRICE_GOLD = 15000;
 const GREEN_GIFT_MAX_COUNT_PER_GOODS = 4;
 const REVIVE_COIN_GOLD_BONUS = 18000;
 const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
-const HTTP_REQUEST_ATTEMPTS = 3;
-const HTTP_REQUEST_TIMEOUT_MS = 15000;
-const SESSION_BOOTSTRAP_ATTEMPTS = 3;
-const MAX_CLIENT_VERSION_PROBES = 8;
-const CLIENT_VERSION_PROBE_DELAY_MS = 150;
-const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
-
 const DEFAULT_DEVICE = {
   platform: 'pc',
   hardware: 'pc',
@@ -42,8 +29,7 @@ const DEFAULT_DEVICE = {
   model_number: 'Chrome',
   screen_width: 1920,
   screen_height: 1080,
-  user_agent:
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+  user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
   screen_type: 2
 };
 
@@ -119,53 +105,23 @@ const fail = message => {
   throw new Error(message);
 };
 
-class MajsoulRpcError extends Error {
-  constructor(operation, response) {
-    const rpcCode = Number(response?.error?.code ?? 0);
-    super(`${operation} failed: ${JSON.stringify(response)}`);
-    this.name = 'MajsoulRpcError';
-    this.operation = operation;
-    this.rpcCode = rpcCode;
-    this.response = response;
-  }
-}
-
-function requireRpcSuccess(operation, response) {
-  const rpcCode = Number(response?.error?.code ?? 0);
-
-  if (rpcCode !== 0) {
-    throw new MajsoulRpcError(operation, response);
-  }
-
-  return response;
-}
-
 const must = (value, message) => value || fail(message);
-
 const normalizeBase = raw => {
   const base = must((raw || '').trim(), 'Server base URL must not be empty');
-
   if (!/^https?:\/\//i.test(base)) {
     fail('Server base URL must start with http:// or https://');
   }
-
   return base.replace(/\/+$/, '');
 };
-
 const buildUrl = (base, path) => `${base}/${path.replace(/^\/+/, '')}`;
-
 const normalizeServerKey = raw => (raw || '').trim().toLowerCase();
-
 const buildRandv = () => {
   const now = Date.now();
   return String(now + Math.floor(Math.random() * now));
 };
 
-const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-
 const hashCnPassword = password =>
   createHmac('sha256', 'lailai').update(password).digest('hex');
-
 const buildDevice = server => ({
   ...DEFAULT_DEVICE,
   ...server.device
@@ -174,72 +130,24 @@ const buildDevice = server => ({
 function getServerConfig(serverKey) {
   const key = normalizeServerKey(serverKey || DEFAULT_SERVER);
   const server = SERVER_CONFIGS[key];
-
   if (!server) {
     fail(`Unsupported MS_SERVER "${serverKey}". Use one of: ${Object.keys(SERVER_CONFIGS).join(', ')}`);
   }
 
   let base = normalizeBase(server.base);
-
   if (server.key === 'cn' && new URL(base).pathname === '/') {
     base = `${base}/1`;
   }
-
   return {
     ...server,
     base
   };
 }
 
-async function requestWithRetry(url, options = {}) {
-  const {
-    timeoutMs = HTTP_REQUEST_TIMEOUT_MS,
-    ...fetchOptions
-  } = options;
-  let lastError;
-
-  for (let attempt = 1; attempt <= HTTP_REQUEST_ATTEMPTS; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetch(url, {
-        ...fetchOptions,
-        signal: controller.signal
-      });
-
-      if (response.ok) {
-        return response;
-      }
-
-      const error = new Error(`Request failed ${response.status} ${response.statusText} for ${url}`);
-      error.retryable = response.status === 429 || response.status >= 500;
-      throw error;
-    } catch (error) {
-      lastError = error;
-
-      if (error?.retryable === false || attempt === HTTP_REQUEST_ATTEMPTS) {
-        throw error;
-      }
-
-      console.warn(
-        `request attempt ${attempt}/${HTTP_REQUEST_ATTEMPTS} failed for ${url}: ${error?.message || error}`
-      );
-      await delay(500 * 2 ** (attempt - 1));
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  throw lastError;
-}
-
 async function requestJson(url, { body, headers, ...options } = {}) {
   const init = { ...options, headers };
-
   if (body !== undefined) {
     init.body = typeof body === 'string' ? body : JSON.stringify(body);
-
     if (typeof body !== 'string') {
       init.headers = {
         Accept: 'application/json',
@@ -249,197 +157,23 @@ async function requestJson(url, { body, headers, ...options } = {}) {
     }
   }
 
-  const response = await requestWithRetry(url, init);
-
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    fail(`Request failed ${response.status} ${response.statusText} for ${url}`);
+  }
   return response.json();
 }
 
 async function requestText(url, options = {}) {
-  const response = await requestWithRetry(url, options);
-
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    fail(`Request failed ${response.status} ${response.statusText} for ${url}`);
+  }
   return response.text();
-}
-
-function compareDottedVersions(a, b) {
-  const pa = String(a).split('.').map(Number);
-  const pb = String(b).split('.').map(Number);
-  const length = Math.max(pa.length, pb.length);
-
-  for (let i = 0; i < length; i += 1) {
-    const da = pa[i] || 0;
-    const db = pb[i] || 0;
-
-    if (da !== db) {
-      return da - db;
-    }
-  }
-
-  return 0;
-}
-
-function getOverrideResourceVersion() {
-  return process.env.MS_RESOURCE_VERSION || process.env.RESOURCE_VERSION || null;
-}
-
-function getOverrideClientVersionString() {
-  return process.env.MS_CLIENT_VERSION_STRING || process.env.CLIENT_VERSION_STRING || null;
-}
-
-function readResourceVersionCache() {
-  try {
-    if (!fs.existsSync(RESOURCE_VERSION_CACHE_PATH)) {
-      return {};
-    }
-
-    return JSON.parse(fs.readFileSync(RESOURCE_VERSION_CACHE_PATH, 'utf8'));
-  } catch (error) {
-    console.warn(`resource version cache read failed: ${error?.message || error}`);
-    return {};
-  }
-}
-
-function saveSuccessfulClientVersion(
-  serverKey,
-  {
-    resourceVersion,
-    clientVersionString,
-    sourceVersion,
-    productVersion
-  }
-) {
-  if (!serverKey || !resourceVersion || !clientVersionString || !sourceVersion || !productVersion) {
-    return;
-  }
-
-  const cache = readResourceVersionCache();
-
-  if (
-    cache[serverKey] === resourceVersion &&
-    cache.clientVersionStrings?.[serverKey] === clientVersionString &&
-    cache.sourceVersions?.[serverKey] === sourceVersion &&
-    cache.productVersions?.[serverKey] === productVersion
-  ) {
-    return;
-  }
-
-  cache[serverKey] = resourceVersion;
-  cache.clientVersionStrings = {
-    ...cache.clientVersionStrings,
-    [serverKey]: clientVersionString
-  };
-  cache.sourceVersions = {
-    ...cache.sourceVersions,
-    [serverKey]: sourceVersion
-  };
-  cache.productVersions = {
-    ...cache.productVersions,
-    [serverKey]: productVersion
-  };
-  cache.updatedAt = new Date().toISOString();
-
-  fs.writeFileSync(RESOURCE_VERSION_CACHE_PATH, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
-
-  console.log(
-    `client version cache saved -> ${serverKey}: ${clientVersionString} (resource ${resourceVersion})`
-  );
-}
-
-function isClientMetadataCacheCurrent(serverKey, sourceVersion, productVersion) {
-  const cache = readResourceVersionCache();
-
-  return (
-    cache.sourceVersions?.[serverKey] === sourceVersion &&
-    cache.productVersions?.[serverKey] === productVersion &&
-    Boolean(cache.clientVersionStrings?.[serverKey])
-  );
-}
-
-function getClientVersionStringCandidates({
-  serverKey,
-  detectedClientVersionStrings = [],
-  webResourceVersion,
-  productVersion
-}) {
-  const cache = readResourceVersionCache();
-  const cachedResourceVersion = cache[serverKey];
-  const cachedClientVersionString = cache.clientVersionStrings?.[serverKey];
-  const overrideResourceVersion = getOverrideResourceVersion();
-  const detectedResourceVersion = detectedClientVersionStrings
-    .filter(value => /^WebGL_\d{4}-0\./.test(value))
-    .map(normalizeResourceVersion)
-    .filter(Boolean)
-    .sort(compareDottedVersions)
-    .at(-1);
-  const cacheIsCurrent = isClientMetadataCacheCurrent(
-    serverKey,
-    webResourceVersion,
-    productVersion
-  );
-  const hasOfficialClientVersion = detectedClientVersionStrings.length > 0;
-  const resourceVersionCandidates = cacheIsCurrent || hasOfficialClientVersion
-    ? [overrideResourceVersion, cachedResourceVersion].filter(Boolean)
-    : buildResourceVersionCandidates({
-      cachedResourceVersion,
-      detectedResourceVersion,
-      overrideResourceVersion
-    });
-
-  return buildClientVersionStringCandidates({
-    overrideClientVersionString: getOverrideClientVersionString(),
-    detectedClientVersionStrings,
-    cachedClientVersionString,
-    resourceVersionCandidates,
-    webResourceVersion,
-    preferCachedClientVersion: cacheIsCurrent
-  });
-}
-
-function isVersionStringError(error) {
-  const message = error?.message || String(error);
-  return (
-    message.includes('version_str') ||
-    message.includes('client_version_string')
-  );
-}
-
-function isClientVersionProbeError(error) {
-  return (
-    isVersionStringError(error) ||
-    (
-      error instanceof MajsoulRpcError &&
-      error.operation === 'oauth2Auth' &&
-      error.rpcCode === 151
-    )
-  );
-}
-
-function buildRoutesUrl(gatewayUrl, version, lang) {
-  const url = new URL(`${gatewayUrl.replace(/\/+$/, '')}/api/clientgate/routes`);
-  url.searchParams.set('platform', 'Web');
-  url.searchParams.set('version', version);
-
-  if (lang) {
-    url.searchParams.set('lang', lang);
-  }
-
-  url.searchParams.set('randv', buildRandv());
-  return url;
-}
-
-function resolveClientVersionStrings({ productVersion } = {}) {
-  const officialClientVersionString =
-    buildUnityWebGLClientVersionString(productVersion);
-
-  console.log(
-    `official Unity metadata -> product=${productVersion} client_version_string=${officialClientVersionString}`
-  );
-
-  return [officialClientVersionString];
 }
 
 function loadProtoTypes(liqiJson) {
   const root = protobuf.Root.fromJSON(liqiJson);
-
   return Object.fromEntries(
     Object.entries(PROTO_TYPES).map(([key, typeName]) => [key, root.lookupType(typeName)])
   );
@@ -447,22 +181,29 @@ function loadProtoTypes(liqiJson) {
 
 function encode(type, payload) {
   const error = type.verify(payload);
-
   if (error) {
     fail(error);
   }
-
   return type.encode(payload).finish();
+}
+
+function buildRoutesUrl(gatewayUrl, version, lang) {
+  const url = new URL(`${gatewayUrl.replace(/\/+$/, '')}/api/clientgate/routes`);
+  url.searchParams.set('platform', 'Web');
+  url.searchParams.set('version', version);
+  if (lang) {
+    url.searchParams.set('lang', lang);
+  }
+  url.searchParams.set('randv', buildRandv());
+  return url;
 }
 
 function shuffle(items) {
   const values = [...items];
-
   for (let i = values.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
     [values[i], values[j]] = [values[j], values[i]];
   }
-
   return values;
 }
 
@@ -475,22 +216,27 @@ async function loadServerContext(server) {
     requestJson(versionUrl),
     requestText(buildUrl(base, 'index.html'))
   ]);
-
   must(versionInfo?.version, `Unexpected version payload: ${JSON.stringify(versionInfo)}`);
 
   const version = versionInfo.version;
   const codeDir = must(String(versionInfo.code || '').split('/')[0], 'Missing code directory for config fetch');
   const productVersion = parseProductVersion(indexHtml);
+  const clientMetadata = buildClientMetadata({
+    productVersion,
+    resourceVersion: process.env.MS_RESOURCE_VERSION || process.env.RESOURCE_VERSION
+  });
+
+  console.log(`version.json -> version=${version} force_version=${versionInfo.force_version} code=${versionInfo.code}`);
+  console.log(
+    `web client -> productVersion=${productVersion} resource=${clientMetadata.clientVersion.resource} client_version_string=${clientMetadata.clientVersionString}`
+  );
 
   const [config, resManifest] = await Promise.all([
     requestJson(buildUrl(base, `${codeDir}/config.json`)),
     requestJson(buildUrl(base, `resversion${version}.json`))
   ]);
 
-  const liqiPrefix = must(
-    resManifest?.res?.['res/proto/liqi.json']?.prefix,
-    'liqi prefix missing from resversion manifest'
-  );
+  const liqiPrefix = must(resManifest?.res?.['res/proto/liqi.json']?.prefix, 'liqi prefix missing from resversion manifest');
   console.log(`liqi prefix: ${liqiPrefix}`);
 
   const gatewayUrl = must(
@@ -498,45 +244,12 @@ async function loadServerContext(server) {
     'Gateway URL missing from config'
   ).replace(/\/+$/, '');
 
-  const cacheIsCurrent = isClientMetadataCacheCurrent(
-    server.key,
-    version,
-    productVersion
-  );
-  let detectedClientVersionStrings = [];
-
-  if (cacheIsCurrent) {
-    console.log('client metadata unchanged -> using the last successful cached settings');
-  } else {
-    console.log('client metadata update detected -> refreshing official version sources');
-    detectedClientVersionStrings = resolveClientVersionStrings({
-      productVersion
-    });
-  }
-
-  const clientVersionStringCandidates = getClientVersionStringCandidates({
-    serverKey: server.key,
-    detectedClientVersionStrings,
-    webResourceVersion: version,
-    productVersion
-  });
-
-  console.log(`version.json -> version=${version} force_version=${versionInfo.force_version} code=${versionInfo.code}`);
-  console.log(
-    `client version candidates -> ${clientVersionStringCandidates.slice(0, 8).join(', ')}${
-      clientVersionStringCandidates.length > 8
-        ? ` ... total=${clientVersionStringCandidates.length}`
-        : ''
-    }`
-  );
-
   const [routes, liqiJson] = await Promise.all([
-    requestJson(buildRoutesUrl(gatewayUrl, productVersion, routeLang)),
+    requestJson(buildRoutesUrl(gatewayUrl, clientMetadata.routeVersion, routeLang)),
     requestJson(buildUrl(base, `${liqiPrefix.replace(/^\/+/, '')}/res/proto/liqi.json`))
   ]);
 
   const routeList = routes?.data?.routes?.filter(route => route?.id && route?.domain) ?? [];
-
   if (!routeList.length) {
     fail('No available gateway servers found.');
   }
@@ -545,7 +258,6 @@ async function loadServerContext(server) {
     id: route.id,
     endpoint: `wss://${route.domain}/gateway`
   }));
-
   console.log(`available gateway routes: ${routesToTry.map(route => route.id).join(', ')}`);
 
   return {
@@ -553,8 +265,7 @@ async function loadServerContext(server) {
     base,
     routes: routesToTry,
     version,
-    productVersion,
-    clientVersionStringCandidates,
+    clientMetadata,
     proto: loadProtoTypes(liqiJson)
   };
 }
@@ -569,28 +280,18 @@ async function openChannel(endpoint, origin, Wrapper) {
       clearTimeout(request.timeout);
       request.reject(error);
     }
-
     pending.clear();
   };
 
   await new Promise((resolve, reject) => {
-    const openTimeout = setTimeout(() => {
-      cleanup();
-      ws.terminate();
-      reject(new Error(`WebSocket connection timeout for ${endpoint}`));
-    }, 15000);
-
     const cleanup = () => {
-      clearTimeout(openTimeout);
       ws.removeListener('open', onOpen);
       ws.removeListener('error', onError);
     };
-
     const onOpen = () => {
       cleanup();
       resolve();
     };
-
     const onError = error => {
       cleanup();
       reject(error);
@@ -602,14 +303,12 @@ async function openChannel(endpoint, origin, Wrapper) {
 
   ws.on('message', data => {
     const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-
     if (buffer[0] !== 3) {
       return;
     }
 
     const requestId = buffer.readUInt16LE(1);
     const request = pending.get(requestId);
-
     if (!request) {
       return;
     }
@@ -655,38 +354,18 @@ async function openChannel(endpoint, origin, Wrapper) {
           if (!error) {
             return;
           }
-
           clearTimeout(timeout);
           pending.delete(requestId);
           reject(error);
         });
       });
     },
-
     async close() {
-      if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      if (ws.readyState === WebSocket.CLOSED) {
         return;
       }
-
       await new Promise(resolve => {
-        let settled = false;
-        let forceCloseTimeout;
-        const finish = () => {
-          if (settled) {
-            return;
-          }
-
-          settled = true;
-          clearTimeout(forceCloseTimeout);
-          ws.removeListener('close', finish);
-          resolve();
-        };
-        forceCloseTimeout = setTimeout(() => {
-          ws.terminate();
-          finish();
-        }, 2000);
-
-        ws.once('close', finish);
+        ws.once('close', resolve);
         ws.close();
       });
     }
@@ -695,91 +374,55 @@ async function openChannel(endpoint, origin, Wrapper) {
 
 async function createSessionForRoute(context, route, credentials) {
   const { server, proto, clientMetadata } = context;
-  const {
-    uid,
-    token,
-    accessToken: configuredAccessToken,
-    email,
-    password
-  } = credentials;
-  const authState = credentials.authState || (credentials.authState = {});
+  const { uid, token, email, password } = credentials;
   const device = buildDevice(server);
-
   console.log(`trying gateway route ${route.id}: ${route.endpoint}`);
-
   const channel = await openChannel(route.endpoint, server.origin, proto.Wrapper);
-
   const call = async (name, requestType, payload, responseType) => {
-    try {
-      const wrapper = await channel.send(name, encode(requestType, payload));
-      return responseType ? responseType.decode(wrapper.data) : wrapper;
-    } catch (error) {
-      await channel.close().catch(() => {});
-      throw error;
-    }
+    const wrapper = await channel.send(name, encode(requestType, payload));
+    return responseType ? responseType.decode(wrapper.data) : wrapper;
   };
-
-  const requireSuccess = async (operation, response) => {
-    try {
-      return requireRpcSuccess(operation, response);
-    } catch (error) {
-      await channel.close().catch(() => {});
-      throw error;
-    }
-  };
-
   const common = (name, responseType) => call(name, proto.ReqCommon, {}, responseType);
 
-  await requireSuccess(
-    'requestConnection',
-    await call(
-      '.lq.Route.requestConnection',
-      proto.ReqRequestConnection,
-      {
-        type: 1,
-        route_id: route.id,
-        timestamp: Date.now()
-      },
-      proto.ResRequestConnection
-    )
+  await call(
+    '.lq.Route.requestConnection',
+    proto.ReqRequestConnection,
+    {
+      type: 1,
+      route_id: route.id,
+      timestamp: Date.now()
+    },
+    proto.ResRequestConnection
   );
-
-  await requireSuccess(
-    'heartbeat',
-    await call(
-      '.lq.Route.heartbeat',
-      proto.ReqHeartbeat,
-      {
-        delay: 0,
-        no_operation_counter: 0,
-        platform: 11,
-        network_quality: 0
-      },
-      proto.ResHeartbeat
-    )
+  await call(
+    '.lq.Route.heartbeat',
+    proto.ReqHeartbeat,
+    {
+      delay: 0,
+      no_operation_counter: 0,
+      platform: 11,
+      network_quality: 0
+    },
+    proto.ResHeartbeat
   );
 
   if (server.loginMode === 'account_password') {
-    const loginResponse = await requireSuccess(
-      'login',
-      await call(
-        '.lq.Lobby.login',
-        proto.ReqLogin,
-        buildPasswordLoginPayload({
-          account: email,
-          password: hashCnPassword(password),
-          device,
-          randomKey: randomUUID(),
-          clientVersion: clientMetadata.clientVersion,
-          clientVersionString: clientMetadata.clientVersionString,
-          currencyPlatforms: server.currencyPlatforms,
-          loginType: server.loginType,
-          tag: server.tag
-        }),
-        proto.ResOauth2Login
-      )
+    const loginResponse = await call(
+      '.lq.Lobby.login',
+      proto.ReqLogin,
+      buildPasswordLoginPayload({
+        account: email,
+        password: hashCnPassword(password),
+        device,
+        randomKey: randomUUID(),
+        clientVersion: clientMetadata.clientVersion,
+        clientVersionString: clientMetadata.clientVersionString,
+        currencyPlatforms: server.currencyPlatforms,
+        loginType: server.loginType,
+        tag: server.tag
+      }),
+      proto.ResOauth2Login
     );
-
     if (!loginResponse.account) {
       fail('login failed: account not found.');
     }
@@ -793,7 +436,23 @@ async function createSessionForRoute(context, route, credentials) {
     };
   }
 
-  const requestOauth2Check = accessToken => call(
+  let accessToken = token;
+  if (server.loginMode === 'oauth_code') {
+    const authResponse = await call(
+      '.lq.Lobby.oauth2Auth',
+      proto.ReqOauth2Auth,
+      buildOauth2AuthPayload({
+        oauthType: server.oauthType,
+        token,
+        uid,
+        clientVersionString: clientMetadata.clientVersionString
+      }),
+      proto.ResOauth2Auth
+    );
+    accessToken = must(authResponse?.access_token, `oauth2Auth failed: ${JSON.stringify(authResponse)}`);
+  }
+
+  const checkResponse = await call(
     '.lq.Lobby.oauth2Check',
     proto.ReqOauth2Check,
     {
@@ -802,95 +461,25 @@ async function createSessionForRoute(context, route, credentials) {
     },
     proto.ResOauth2Check
   );
-
-  let accessToken = authState.configuredAccessTokenRejected
-    ? null
-    : configuredAccessToken;
-  let checkResponse;
-
-  if (accessToken) {
-    console.log('using configured MahjongSoul access token');
-    const configuredCheckResponse = await requestOauth2Check(accessToken);
-
-    if (
-      shouldRetryWithOauthCode(configuredCheckResponse, {
-        uid,
-        token
-      })
-    ) {
-      console.warn(
-        'configured access token was not accepted -> retrying the official UID/TOKEN login flow'
-      );
-      authState.configuredAccessTokenRejected = true;
-      accessToken = null;
-    } else {
-      checkResponse = await requireSuccess('oauth2Check', configuredCheckResponse);
-    }
-  } else if (
-    server.loginMode === 'oauth_code' &&
-    !authState.tokenAccessCheckRejected
-  ) {
-    const directCheckResponse = await requestOauth2Check(token);
-    const directCheckCode = Number(directCheckResponse?.error?.code ?? 0);
-
-    if (directCheckCode === 0 && directCheckResponse?.has_account) {
-      console.log('TOKEN contains a reusable MahjongSoul access token');
-      accessToken = token;
-      checkResponse = directCheckResponse;
-    } else {
-      authState.tokenAccessCheckRejected = true;
-    }
-  }
-
-  if (!accessToken && server.loginMode === 'oauth_code') {
-    const authResponse = await requireSuccess(
-      'oauth2Auth',
-      await call(
-        '.lq.Lobby.oauth2Auth',
-        proto.ReqOauth2Auth,
-        buildOauth2AuthPayload({
-          oauthType: server.oauthType,
-          token,
-          uid,
-          clientVersionString: clientMetadata.clientVersionString
-        }),
-        proto.ResOauth2Auth
-      )
-    );
-
-    accessToken = must(authResponse?.access_token, `oauth2Auth failed: ${JSON.stringify(authResponse)}`);
-  }
-
-  if (!checkResponse) {
-    checkResponse = await requireSuccess(
-      'oauth2Check',
-      await requestOauth2Check(accessToken)
-    );
-  }
-
   if (!checkResponse?.has_account) {
     fail(`oauth2Check failed: ${JSON.stringify(checkResponse)}`);
   }
 
-  const loginResponse = await requireSuccess(
-    'oauth2Login',
-    await call(
-      '.lq.Lobby.oauth2Login',
-      proto.ReqOauth2Login,
-      buildOauth2LoginPayload({
-        oauthType: server.oauthType,
-        accessToken,
-        device,
-        randomKey: randomUUID(),
-        clientVersion: clientMetadata.clientVersion,
-        clientVersionString: clientMetadata.clientVersionString,
-        currencyPlatforms: server.currencyPlatforms,
-        tag: server.tag
-      }),
-      proto.ResOauth2Login
-    )
+  const loginResponse = await call(
+    '.lq.Lobby.oauth2Login',
+    proto.ReqOauth2Login,
+    buildOauth2LoginPayload({
+      oauthType: server.oauthType,
+      accessToken,
+      device,
+      randomKey: randomUUID(),
+      clientVersion: clientMetadata.clientVersion,
+      clientVersionString: clientMetadata.clientVersionString,
+      currencyPlatforms: server.currencyPlatforms,
+      tag: server.tag
+    }),
+    proto.ResOauth2Login
   );
-
   if (!loginResponse.account) {
     fail('oauth2Login failed: account not found.');
   }
@@ -904,7 +493,7 @@ async function createSessionForRoute(context, route, credentials) {
   };
 }
 
-async function createSessionWithRoutes(context, credentials) {
+async function createSession(context, credentials) {
   const errors = [];
 
   for (const route of context.routes) {
@@ -913,88 +502,14 @@ async function createSessionWithRoutes(context, credentials) {
     } catch (error) {
       errors.push({ route: route.id, message: error?.message || String(error) });
       console.warn(`gateway route ${route.id} failed: ${error?.message || error}`);
-
-      if (error instanceof MajsoulRpcError || isVersionStringError(error)) {
-        throw error;
-      }
     }
   }
 
   fail(`All gateway routes failed: ${JSON.stringify(errors)}`);
 }
 
-async function createSession(context, credentials) {
-  const errors = [];
-  const clientVersionStringCandidates =
-    context.clientVersionStringCandidates.slice(0, MAX_CLIENT_VERSION_PROBES);
-  const sessionCredentials = {
-    ...credentials,
-    authState: {}
-  };
-
-  if (context.clientVersionStringCandidates.length > clientVersionStringCandidates.length) {
-    console.log(
-      `client version recovery will probe at most ${MAX_CLIENT_VERSION_PROBES} candidates this run`
-    );
-  }
-
-  for (let index = 0; index < clientVersionStringCandidates.length; index += 1) {
-    const clientVersionString = clientVersionStringCandidates[index];
-    const clientMetadata = buildClientMetadata({
-      productVersion: context.productVersion,
-      resourceVersion: context.version,
-      clientVersionString
-    });
-
-    const candidateContext = {
-      ...context,
-      clientMetadata
-    };
-
-    console.log(
-      `trying resource version: ${clientMetadata.clientVersion.resource} -> ${clientMetadata.clientVersionString}`
-    );
-
-    try {
-      const session = await createSessionWithRoutes(candidateContext, sessionCredentials);
-      saveSuccessfulClientVersion(
-        context.server.key,
-        {
-          resourceVersion: clientMetadata.clientVersion.resource,
-          clientVersionString: clientMetadata.clientVersionString,
-          sourceVersion: context.version,
-          productVersion: context.productVersion
-        }
-      );
-      return session;
-    } catch (error) {
-      const message = error?.message || String(error);
-
-      if (!isClientVersionProbeError(error)) {
-        error.resourceVersion = clientMetadata.clientVersion.resource;
-        error.clientVersionString = clientMetadata.clientVersionString;
-        throw error;
-      }
-
-      errors.push({
-        clientVersionString: clientMetadata.clientVersionString,
-        message
-      });
-
-      console.warn(`client version rejected: ${clientMetadata.clientVersionString}`);
-
-      if (index + 1 < clientVersionStringCandidates.length) {
-        await delay(CLIENT_VERSION_PROBE_DELAY_MS);
-      }
-    }
-  }
-
-  throw new Error(`All client version candidates failed: ${JSON.stringify(errors)}`);
-}
-
 async function runActions(session) {
   const { proto, common, call, loginGold } = session;
-
   console.log('oauth2Login.account.gold:', loginGold);
 
   const payResponse = await common('.lq.Lobby.payMonthTicket', proto.ResPayMonthTicket);
@@ -1009,7 +524,6 @@ async function runActions(session) {
 
   const gainReviveCoinResponse = await common('.lq.Lobby.gainReviveCoin', proto.ResCommon);
   const gainReviveCoinErrorCode = Number(gainReviveCoinResponse?.error?.code ?? 0);
-
   if (gainReviveCoinErrorCode === 0) {
     console.log('gainReviveCoin: success');
   } else {
@@ -1021,11 +535,9 @@ async function runActions(session) {
 
   const shopInfoResponse = await common('.lq.Lobby.fetchShopInfo', proto.ResShopInfo);
   const zhpGoods = shopInfoResponse.shop_info?.zhp?.goods;
-
   if (!zhpGoods) {
     fail('fetchShopInfo failed: shop_info.zhp not found.');
   }
-
   console.log('fetchShopInfo.shop_info.zhp.goods:', JSON.stringify(zhpGoods));
 
   const greenGoodsIds = zhpGoods.slice(0, 4).map(Number).filter(id => Number.isInteger(id) && id > 0);
@@ -1040,14 +552,12 @@ async function runActions(session) {
     }
 
     const count = Math.min(GREEN_GIFT_MAX_COUNT_PER_GOODS, remainingPurchaseCount);
-
     const buyResponse = await call(
       '.lq.Lobby.buyFromZHP',
       proto.ReqBuyFromZHP,
       { goods_id: goodsId, count },
       proto.ResCommon
     );
-
     const errorCode = Number(buyResponse?.error?.code ?? 0);
 
     if (errorCode === BUY_FROM_ZHP_LIMIT_REACHED_CODE) {
@@ -1057,7 +567,6 @@ async function runActions(session) {
       );
       break;
     }
-
     if (errorCode !== 0) {
       fail(`buyFromZHP failed for goods_id=${goodsId} count=${count}: ${JSON.stringify(buyResponse)}`);
     }
@@ -1076,7 +585,6 @@ function loadRuntimeConfig() {
   const server = getServerConfig(process.env.MS_SERVER);
   const uid = process.env.UID;
   const token = process.env.TOKEN;
-  const accessToken = process.env.ACCESS_TOKEN;
   const email = process.env.EMAIL;
   const password = process.env.PASSWORD;
 
@@ -1084,60 +592,25 @@ function loadRuntimeConfig() {
     if (!email || !password) {
       fail('EMAIL and PASSWORD environment variables are required for CN server.');
     }
-  } else if (!accessToken && (!uid || !token)) {
-    fail('Set ACCESS_TOKEN, or both UID and TOKEN, for JP/EN/KR servers.');
+  } else if (!uid || !token) {
+    fail('UID and TOKEN environment variables are required for JP/EN/KR servers.');
   }
 
   return {
     uid,
     token,
-    accessToken,
     email,
     password,
     server
   };
 }
 
-function shouldRetryWithOauthCode(checkResponse, { uid, token } = {}) {
-  const rpcCode = Number(checkResponse?.error?.code ?? 0);
-  const accessTokenIsUsable = rpcCode === 0 && checkResponse?.has_account;
-
-  return Boolean(uid && token && !accessTokenIsUsable);
-}
-
 async function run() {
   const credentials = loadRuntimeConfig();
   const { server } = credentials;
-
   console.log(`selected server: ${server.key}`);
-
-  let session;
-
-  for (let attempt = 1; attempt <= SESSION_BOOTSTRAP_ATTEMPTS; attempt += 1) {
-    try {
-      const context = await loadServerContext(server);
-      session = await createSession(context, credentials);
-      break;
-    } catch (error) {
-      const shouldRetry =
-        !(error instanceof MajsoulRpcError) &&
-        !isVersionStringError(error) &&
-        attempt < SESSION_BOOTSTRAP_ATTEMPTS;
-
-      if (!shouldRetry) {
-        throw error;
-      }
-
-      console.warn(
-        `session bootstrap attempt ${attempt}/${SESSION_BOOTSTRAP_ATTEMPTS} failed: ${error?.message || error}`
-      );
-      await delay(1000 * 2 ** (attempt - 1));
-    }
-  }
-
-  if (!session) {
-    fail('Session bootstrap ended without a session.');
-  }
+  const context = await loadServerContext(server);
+  const session = await createSession(context, credentials);
 
   try {
     await runActions(session);
@@ -1156,14 +629,8 @@ if (require.main === module) {
 module.exports = {
   createSession,
   getServerConfig,
-  getClientVersionStringCandidates,
-  isClientVersionProbeError,
-  isVersionStringError,
   loadRuntimeConfig,
   loadServerContext,
-  MajsoulRpcError,
-  requireRpcSuccess,
   run,
-  runActions,
-  shouldRetryWithOauthCode
+  runActions
 };
