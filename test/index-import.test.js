@@ -68,29 +68,96 @@ test('explicit client version errors are treated as version mismatches', () => {
   );
 });
 
-test('oauth2Auth code 151 can trigger bounded client version recovery', () => {
+test('oauth2Auth code 150 triggers version recovery while code 151 refreshes the route queue', () => {
   const {
+    isConnectionQueueError,
     isClientVersionProbeError,
     requireRpcSuccess
   } = require('../src/index');
 
-  let authError;
-  let checkError;
+  let outdatedClientError;
+  let missingQueueError;
+
+  try {
+    requireRpcSuccess('oauth2Auth', { error: { code: 150 } });
+  } catch (error) {
+    outdatedClientError = error;
+  }
 
   try {
     requireRpcSuccess('oauth2Auth', { error: { code: 151 } });
   } catch (error) {
-    authError = error;
+    missingQueueError = error;
   }
 
-  try {
-    requireRpcSuccess('oauth2Check', { error: { code: 151 } });
-  } catch (error) {
-    checkError = error;
-  }
+  assert.equal(isClientVersionProbeError(outdatedClientError), true);
+  assert.equal(isConnectionQueueError(outdatedClientError), false);
+  assert.equal(isClientVersionProbeError(missingQueueError), false);
+  assert.equal(isConnectionQueueError(missingQueueError), true);
+});
 
-  assert.equal(isClientVersionProbeError(authError), true);
-  assert.equal(isClientVersionProbeError(checkError), false);
+test('requestConnection matches the official Unity route handshake', () => {
+  const {
+    buildRequestConnectionPayload,
+    ensureRequestConnectionPlatformField
+  } = require('../src/index');
+  const liqiJson = {
+    nested: {
+      lq: {
+        nested: {
+          ReqRequestConnection: {
+            fields: {
+              type: { type: 'uint32', id: 2 },
+              route_id: { type: 'string', id: 3 },
+              timestamp: { type: 'uint64', id: 4 }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  ensureRequestConnectionPlatformField(liqiJson);
+
+  assert.deepEqual(
+    liqiJson.nested.lq.nested.ReqRequestConnection.fields.platform,
+    { type: 'string', id: 6 }
+  );
+  assert.deepEqual(
+    buildRequestConnectionPayload({ id: 'route-2' }, 1_753_376_523_987),
+    {
+      type: 1,
+      route_id: 'route-2',
+      timestamp: 1_753_376_523,
+      platform: 'Web'
+    }
+  );
+});
+
+test('alternate YoStar credentials are tried per version before scanning onward', () => {
+  const { buildClientAuthenticationAttempts } = require('../src/index');
+  const primary = { token: 'primary' };
+  const alternate = { token: 'alternate' };
+
+  const attempts = buildClientAuthenticationAttempts(
+    ['WebGL_2022-0.16.212', 'WebGL_2022-0.16.213'],
+    [primary, alternate],
+    2
+  );
+
+  assert.deepEqual(
+    attempts.map(attempt => [
+      attempt.clientVersionString,
+      attempt.credential.token,
+      attempt.credentialIndex
+    ]),
+    [
+      ['WebGL_2022-0.16.212', 'primary', 0],
+      ['WebGL_2022-0.16.212', 'alternate', 1],
+      ['WebGL_2022-0.16.213', 'primary', 0],
+      ['WebGL_2022-0.16.213', 'alternate', 1]
+    ]
+  );
 });
 
 test('exhausted metadata candidates are marked as non-retryable', async () => {
@@ -106,4 +173,117 @@ test('exhausted metadata candidates are marked as non-retryable', async () => {
       error.retryable === false &&
       /All supported client metadata candidates were rejected/.test(error.message)
   );
+});
+
+test('a metadata update keeps bounded Unity resource recovery candidates', () => {
+  const { getClientVersionStringCandidates } = require('../src/index');
+  const previousResourceVersion = process.env.MS_RESOURCE_VERSION;
+
+  process.env.MS_RESOURCE_VERSION = '0.16.212';
+
+  try {
+    const candidates = getClientVersionStringCandidates({
+      serverKey: 'jp-test-recovery',
+      detectedClientVersionStrings: ['WebGL_2022-4.0.11'],
+      webResourceVersion: '0.11.252.w',
+      productVersion: '4.0.11',
+      buildId: 'jp-WebGL-release-4.0.11(12)'
+    });
+
+    assert.deepEqual(candidates.slice(0, 6), [
+      'WebGL_2022-4.0.11',
+      'web-0.11.252',
+      'WebGL_2022-0.16.212',
+      'WebGL_2022-0.16.213',
+      'WebGL_2022-0.16.211',
+      'WebGL_2022-0.16.214'
+    ]);
+    assert.ok(candidates.length > 96);
+  } finally {
+    if (previousResourceVersion === undefined) {
+      delete process.env.MS_RESOURCE_VERSION;
+    } else {
+      process.env.MS_RESOURCE_VERSION = previousResourceVersion;
+    }
+  }
+});
+
+test('YoStar refresh is limited to JP authentication rejection with base secrets', () => {
+  const { shouldRefreshYostarCredentials } = require('../src/index');
+  const error = { yostarAuthRejected: true };
+  const credentials = {
+    uid: 'uid',
+    token: 'active-token',
+    baseUid: 'uid',
+    baseToken: 'base-token',
+    server: { key: 'jp' }
+  };
+
+  assert.equal(shouldRefreshYostarCredentials(error, credentials), true);
+  assert.equal(
+    shouldRefreshYostarCredentials(error, {
+      ...credentials,
+      server: { key: 'en' }
+    }),
+    false
+  );
+  assert.equal(
+    shouldRefreshYostarCredentials({}, credentials),
+    false
+  );
+});
+
+test('official YoStar account token is tried before quick-login cache token', () => {
+  const { buildYostarCredentialCandidates } = require('../src/index');
+  const credentials = {
+    uid: '123',
+    token: 'configured-token',
+    accessToken: 'stale-access-token',
+    server: { key: 'jp' }
+  };
+
+  const candidates = buildYostarCredentialCandidates(credentials, {
+    uid: '123',
+    token: 'configured-token',
+    responseUid: '123',
+    responseToken: 'quick-login-cache-token'
+  });
+
+  assert.deepEqual(
+    candidates.map(candidate => ({
+      uid: candidate.uid,
+      token: candidate.token,
+      accessToken: candidate.accessToken
+    })),
+    [
+      {
+        uid: '123',
+        token: 'configured-token',
+        accessToken: null
+      },
+      {
+        uid: '123',
+        token: 'quick-login-cache-token',
+        accessToken: null
+      }
+    ]
+  );
+});
+
+test('copied credential labels, quotes, and surrounding whitespace are removed', () => {
+  const { normalizeSecretCredential } = require('../src/index');
+
+  assert.equal(
+    normalizeSecretCredential(' UID: 12345\nTOKEN: abc ', 'UID'),
+    '12345'
+  );
+  assert.equal(
+    normalizeSecretCredential('UID: 12345\nTOKEN: abc', 'TOKEN'),
+    'abc'
+  );
+  assert.equal(
+    normalizeSecretCredential('  "abc-token"  ', 'TOKEN'),
+    'abc-token'
+  );
+  assert.equal(normalizeSecretCredential('   ', 'TOKEN'), undefined);
 });

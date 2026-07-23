@@ -177,12 +177,30 @@ test('resource version candidates continue forward from the newest known version
     '0.16.258',
     '0.16.260',
     '0.16.261',
+    '0.16.259',
     '0.16.262',
-    '0.16.263',
-    '0.17.0'
+    '0.16.263'
   ]);
   assert.ok(candidates.includes('0.17.1'));
-  assert.ok(candidates.includes('0.16.259'));
+});
+
+test('resource recovery alternates around a cached value that may be stale', () => {
+  const candidates = buildResourceVersionCandidates({
+    cachedResourceVersion: '0.16.260',
+    forwardScanLimit: 3,
+    nextMinorScanLimit: 0,
+    backwardScanLimit: 3
+  });
+
+  assert.deepEqual(candidates.slice(0, 7), [
+    '0.16.260',
+    '0.16.261',
+    '0.16.259',
+    '0.16.262',
+    '0.16.258',
+    '0.16.263',
+    '0.16.257'
+  ]);
 });
 
 test('resource version recovery checks a new minor before a long patch scan', () => {

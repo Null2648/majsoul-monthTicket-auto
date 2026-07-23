@@ -1,7 +1,7 @@
 const DEFAULT_RESOURCE_VERSION = '0.16.193';
 const DEFAULT_FORWARD_SCAN_LIMIT = 128;
 const DEFAULT_NEXT_MINOR_SCAN_LIMIT = 32;
-const DEFAULT_BACKWARD_SCAN_LIMIT = 16;
+const DEFAULT_BACKWARD_SCAN_LIMIT = 64;
 
 function parseProductVersion(html) {
   const match = String(html || '').match(/productVersion\s*:\s*["']([^"']+)["']/);
@@ -153,6 +153,10 @@ function buildResourceVersionCandidates({
 
   for (let offset = 1; offset <= firstForwardScanLimit; offset += 1) {
     addCandidate(formatResourceVersion([major, minor, patch + offset]));
+
+    if (offset <= backwardScanLimit && patch - offset >= 0) {
+      addCandidate(formatResourceVersion([major, minor, patch - offset]));
+    }
   }
 
   for (let nextPatch = 0; nextPatch <= nextMinorScanLimit; nextPatch += 1) {
@@ -161,10 +165,10 @@ function buildResourceVersionCandidates({
 
   for (let offset = firstForwardScanLimit + 1; offset <= forwardScanLimit; offset += 1) {
     addCandidate(formatResourceVersion([major, minor, patch + offset]));
-  }
 
-  for (let offset = 1; offset <= backwardScanLimit && patch - offset >= 0; offset += 1) {
-    addCandidate(formatResourceVersion([major, minor, patch - offset]));
+    if (offset <= backwardScanLimit && patch - offset >= 0) {
+      addCandidate(formatResourceVersion([major, minor, patch - offset]));
+    }
   }
 
   return candidates;

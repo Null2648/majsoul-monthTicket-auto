@@ -17,6 +17,11 @@ const {
   parseProductVersion,
   parseUnityBuildId
 } = require('./client-metadata');
+const {
+  readTokenCache,
+  refreshYostarCredentials,
+  saveTokenCache
+} = require('./yostar-websdk');
 
 const DEFAULT_SERVER = 'jp';
 const BUY_GREEN_GIFT = false;
@@ -27,9 +32,13 @@ const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
 const HTTP_REQUEST_ATTEMPTS = 3;
 const HTTP_REQUEST_TIMEOUT_MS = 15000;
 const SESSION_BOOTSTRAP_ATTEMPTS = 3;
-const MAX_CLIENT_VERSION_PROBES = 8;
+// A successful client string is persisted and remains the first candidate, so the
+// normal daily path still performs one authentication attempt. This wider bound is
+// only consumed after MahjongSoul rejects that fast path during a client update.
+const MAX_CLIENT_VERSION_PROBES = 96;
 const CLIENT_VERSION_PROBE_DELAY_MS = 150;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
+const ROUTE_DETAIL_PLATFORM = 'Web';
 
 const DEFAULT_DEVICE = {
   platform: 'pc',
@@ -156,6 +165,33 @@ const normalizeBase = raw => {
 const buildUrl = (base, path) => `${base}/${path.replace(/^\/+/, '')}`;
 
 const normalizeServerKey = raw => (raw || '').trim().toLowerCase();
+
+function normalizeSecretCredential(raw, label) {
+  if (raw == null) {
+    return undefined;
+  }
+
+  let value = String(raw).trim();
+  const labeledValue = value.match(
+    new RegExp(`(?:^|\\r?\\n)${label}\\s*:\\s*([^\\r\\n]+)`, 'i')
+  )?.[1];
+
+  if (labeledValue) {
+    value = labeledValue.trim();
+  }
+
+  if (
+    value.length >= 2 &&
+    (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    )
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+
+  return value || undefined;
+}
 
 const buildRandv = () => {
   const now = Date.now();
@@ -392,14 +428,11 @@ function getClientVersionStringCandidates({
     productVersion,
     buildId
   );
-  const hasOfficialClientVersion = detectedClientVersionStrings.length > 0;
-  const resourceVersionCandidates = cacheIsCurrent || hasOfficialClientVersion
-    ? [overrideResourceVersion, cachedResourceVersion].filter(Boolean)
-    : buildResourceVersionCandidates({
-      cachedResourceVersion,
-      detectedResourceVersion,
-      overrideResourceVersion
-    });
+  const resourceVersionCandidates = buildResourceVersionCandidates({
+    cachedResourceVersion,
+    detectedResourceVersion,
+    overrideResourceVersion
+  });
 
   return buildClientVersionStringCandidates({
     overrideClientVersionString: getOverrideClientVersionString(),
@@ -425,8 +458,16 @@ function isClientVersionProbeError(error) {
     (
       error instanceof MajsoulRpcError &&
       error.operation === 'oauth2Auth' &&
-      error.rpcCode === 151
+      error.rpcCode === 150
     )
+  );
+}
+
+function isConnectionQueueError(error) {
+  return (
+    error instanceof MajsoulRpcError &&
+    error.operation === 'oauth2Auth' &&
+    error.rpcCode === 151
   );
 }
 
@@ -444,22 +485,47 @@ function buildRoutesUrl(gatewayUrl, version, lang) {
 }
 
 function resolveClientVersionStrings({ productVersion } = {}) {
-  const officialClientVersionString =
+  const unityPackageCandidate =
     buildUnityWebGLClientVersionString(productVersion);
 
   console.log(
-    `official Unity metadata -> product=${productVersion} client_version_string=${officialClientVersionString}`
+    `official Unity metadata -> product=${productVersion} package_candidate=${unityPackageCandidate}`
   );
 
-  return [officialClientVersionString];
+  return [unityPackageCandidate];
+}
+
+function ensureRequestConnectionPlatformField(liqiJson) {
+  const fields =
+    liqiJson?.nested?.lq?.nested?.ReqRequestConnection?.fields;
+
+  if (fields && !fields.platform) {
+    fields.platform = {
+      type: 'string',
+      id: 6
+    };
+    console.log('route protocol compatibility -> added official requestConnection.platform field');
+  }
+
+  return liqiJson;
 }
 
 function loadProtoTypes(liqiJson) {
+  ensureRequestConnectionPlatformField(liqiJson);
   const root = protobuf.Root.fromJSON(liqiJson);
 
   return Object.fromEntries(
     Object.entries(PROTO_TYPES).map(([key, typeName]) => [key, root.lookupType(typeName)])
   );
+}
+
+function buildRequestConnectionPayload(route, now = Date.now()) {
+  return {
+    type: 1,
+    route_id: route.id,
+    timestamp: Math.floor(now / 1000),
+    platform: ROUTE_DETAIL_PLATFORM
+  };
 }
 
 function encode(type, payload) {
@@ -757,11 +823,7 @@ async function createSessionForRoute(context, route, credentials) {
     await call(
       '.lq.Route.requestConnection',
       proto.ReqRequestConnection,
-      {
-        type: 1,
-        route_id: route.id,
-        timestamp: Date.now()
-      },
+      buildRequestConnectionPayload(route),
       proto.ResRequestConnection
     )
   );
@@ -928,40 +990,77 @@ async function createSessionForRoute(context, route, credentials) {
 
 async function createSessionWithRoutes(context, credentials) {
   const errors = [];
+  let lastError;
 
   for (const route of context.routes) {
     try {
       return await createSessionForRoute(context, route, credentials);
     } catch (error) {
+      lastError = error;
       errors.push({ route: route.id, message: error?.message || String(error) });
       console.warn(`gateway route ${route.id} failed: ${error?.message || error}`);
 
-      if (error instanceof MajsoulRpcError || isVersionStringError(error)) {
+      if (isClientVersionProbeError(error)) {
         throw error;
       }
     }
   }
 
+  if (lastError instanceof MajsoulRpcError || isVersionStringError(lastError)) {
+    throw lastError;
+  }
+
   fail(`All gateway routes failed: ${JSON.stringify(errors)}`);
 }
 
-async function createSession(context, credentials) {
+function buildClientAuthenticationAttempts(
+  clientVersionStringCandidates,
+  credentials,
+  maxClientVersionProbes = MAX_CLIENT_VERSION_PROBES
+) {
+  const credentialCandidates = Array.isArray(credentials)
+    ? credentials
+    : [credentials];
+
+  return clientVersionStringCandidates
+    .slice(0, maxClientVersionProbes)
+    .flatMap(clientVersionString =>
+      credentialCandidates.map((credential, credentialIndex) => ({
+        clientVersionString,
+        credential,
+        credentialIndex
+      }))
+    );
+}
+
+async function createSession(context, credentials, { onCredentialAccepted } = {}) {
   const errors = [];
   const clientVersionStringCandidates =
     context.clientVersionStringCandidates.slice(0, MAX_CLIENT_VERSION_PROBES);
-  const sessionCredentials = {
-    ...credentials,
+  const rawCredentialCandidates = Array.isArray(credentials)
+    ? credentials
+    : [credentials];
+  const sessionCredentialCandidates = rawCredentialCandidates.map(candidate => ({
+    ...candidate,
     authState: {}
-  };
+  }));
+  const attempts = buildClientAuthenticationAttempts(
+    clientVersionStringCandidates,
+    sessionCredentialCandidates
+  );
 
   if (context.clientVersionStringCandidates.length > clientVersionStringCandidates.length) {
     console.log(
-      `client version recovery will probe at most ${MAX_CLIENT_VERSION_PROBES} candidates this run`
+      `client version recovery is armed; at most ${MAX_CLIENT_VERSION_PROBES} candidates will be tried only if the fast path is rejected`
     );
   }
 
-  for (let index = 0; index < clientVersionStringCandidates.length; index += 1) {
-    const clientVersionString = clientVersionStringCandidates[index];
+  for (let index = 0; index < attempts.length; index += 1) {
+    const {
+      clientVersionString,
+      credential,
+      credentialIndex
+    } = attempts[index];
     const clientMetadata = buildClientMetadata({
       productVersion: context.productVersion,
       resourceVersion: context.version,
@@ -974,11 +1073,13 @@ async function createSession(context, credentials) {
     };
 
     console.log(
-      `trying resource version: ${clientMetadata.clientVersion.resource} -> ${clientMetadata.clientVersionString}`
+      `trying resource version: ${clientMetadata.clientVersion.resource} -> ${clientMetadata.clientVersionString}${
+        credentialIndex > 0 ? ' (alternate YoStar credential)' : ''
+      }`
     );
 
     try {
-      const session = await createSessionWithRoutes(candidateContext, sessionCredentials);
+      const session = await createSessionWithRoutes(candidateContext, credential);
       saveSuccessfulClientVersion(
         context.server.key,
         {
@@ -989,6 +1090,7 @@ async function createSession(context, credentials) {
           buildId: context.buildId
         }
       );
+      onCredentialAccepted?.(rawCredentialCandidates[credentialIndex]);
       return session;
     } catch (error) {
       const message = error?.message || String(error);
@@ -1001,12 +1103,20 @@ async function createSession(context, credentials) {
 
       errors.push({
         clientVersionString: clientMetadata.clientVersionString,
+        credentialCandidate: credentialIndex + 1,
+        operation: error?.operation,
+        rpcCode: error?.rpcCode,
         message
       });
 
       console.warn(`client version rejected: ${clientMetadata.clientVersionString}`);
 
-      if (index + 1 < clientVersionStringCandidates.length) {
+      const nextAttempt = attempts[index + 1];
+
+      if (
+        nextAttempt &&
+        nextAttempt.clientVersionString !== clientVersionString
+      ) {
         await delay(CLIENT_VERSION_PROBE_DELAY_MS);
       }
     }
@@ -1014,6 +1124,11 @@ async function createSession(context, credentials) {
 
   const error = new Error(
     `All supported client metadata candidates were rejected during authentication: ${JSON.stringify(errors)}`
+  );
+  error.yostarAuthRejected = errors.some(
+    candidate =>
+      candidate.operation === 'oauth2Auth' &&
+      candidate.rpcCode === 151
   );
   error.retryable = false;
   throw error;
@@ -1101,11 +1216,24 @@ async function runActions(session) {
 
 function loadRuntimeConfig() {
   const server = getServerConfig(process.env.MS_SERVER);
-  const uid = process.env.UID;
-  const token = process.env.TOKEN;
-  const accessToken = process.env.ACCESS_TOKEN;
+  const baseUid = normalizeSecretCredential(process.env.UID, 'UID');
+  const baseToken = normalizeSecretCredential(process.env.TOKEN, 'TOKEN');
+  const accessToken = normalizeSecretCredential(
+    process.env.ACCESS_TOKEN,
+    'ACCESS_TOKEN'
+  );
+  const configuredYostarDeviceId = normalizeSecretCredential(
+    process.env.YOSTAR_DEVICE_ID,
+    'YOSTAR_DEVICE_ID'
+  );
   const email = process.env.EMAIL;
   const password = process.env.PASSWORD;
+  const tokenCache =
+    server.key === 'jp' && baseUid && baseToken
+      ? readTokenCache(baseUid, baseToken)
+      : null;
+  const uid = tokenCache?.uid || baseUid;
+  const token = tokenCache?.token || baseToken;
 
   if (server.loginMode === 'account_password') {
     if (!email || !password) {
@@ -1115,9 +1243,17 @@ function loadRuntimeConfig() {
     fail('Set ACCESS_TOKEN, or both UID and TOKEN, for JP/EN/KR servers.');
   }
 
+  if (tokenCache) {
+    console.log('encrypted YoStar login cache loaded');
+  }
+
   return {
     uid,
     token,
+    baseUid,
+    baseToken,
+    yostarDeviceId: configuredYostarDeviceId || tokenCache?.deviceId,
+    yostarMetadata: tokenCache?.webSdkMetadata,
     accessToken,
     email,
     password,
@@ -1132,6 +1268,147 @@ function shouldRetryWithOauthCode(checkResponse, { uid, token } = {}) {
   return Boolean(uid && token && !accessTokenIsUsable);
 }
 
+function shouldRefreshYostarCredentials(error, credentials) {
+  return Boolean(
+    error?.yostarAuthRejected &&
+    credentials?.server?.key === 'jp' &&
+    credentials?.uid &&
+    credentials?.token &&
+    credentials?.baseUid &&
+    credentials?.baseToken
+  );
+}
+
+function buildYostarCredentialCandidates(credentials, refreshed) {
+  const candidates = [
+    {
+      ...credentials,
+      uid: refreshed.uid,
+      token: refreshed.token,
+      accessToken: null
+    }
+  ];
+
+  if (
+    refreshed.responseUid &&
+    refreshed.responseToken &&
+    (
+      refreshed.responseUid !== refreshed.uid ||
+      refreshed.responseToken !== refreshed.token
+    )
+  ) {
+    candidates.push({
+      ...credentials,
+      uid: refreshed.responseUid,
+      token: refreshed.responseToken,
+      accessToken: null
+    });
+  }
+
+  return candidates;
+}
+
+async function createSessionWithYostarRefresh(context, credentials) {
+  let credentialCandidates = [credentials];
+  let refreshed;
+  let refreshError;
+
+  if (
+    credentials.server.key === 'jp' &&
+    credentials.uid &&
+    credentials.token &&
+    credentials.baseUid &&
+    credentials.baseToken
+  ) {
+    try {
+      try {
+        refreshed = await refreshYostarCredentials({
+          gameBase: credentials.server.base,
+          uid: credentials.uid,
+          token: credentials.token,
+          deviceId: credentials.yostarDeviceId,
+          metadata: credentials.yostarMetadata
+        });
+      } catch (error) {
+        if (!credentials.yostarMetadata) {
+          throw error;
+        }
+
+        console.warn(
+          'cached YoStar WebSDK metadata was rejected -> refreshing official SDK metadata'
+        );
+        refreshed = await refreshYostarCredentials({
+          gameBase: credentials.server.base,
+          uid: credentials.uid,
+          token: credentials.token,
+          deviceId: credentials.yostarDeviceId
+        });
+      }
+
+      credentialCandidates = buildYostarCredentialCandidates(
+        credentials,
+        refreshed
+      );
+      console.log('YoStar login token validated before game authentication');
+    } catch (error) {
+      refreshError = error;
+      console.warn(
+        error?.yostarCode === 100403
+          ? 'YoStar login token is expired; trying the remaining configured game credential'
+          : `YoStar login validation was unavailable: ${error?.message || error}`
+      );
+    }
+  }
+
+  let session;
+  let successfulCredentials;
+
+  try {
+    session = await createSession(context, credentialCandidates, {
+      onCredentialAccepted: activeCredentials => {
+        successfulCredentials = activeCredentials;
+      }
+    });
+  } catch (error) {
+    if (
+      shouldRefreshYostarCredentials(error, credentials) &&
+      refreshError?.yostarCode === 100403
+    ) {
+      const expiredError = new Error(
+        'YoStar login token expired (WebSDK code 100403). ' +
+        'Issue a fresh LOGIN_UID/LOGIN_TOKEN once with test_sdk.Login and update ' +
+        'the repository UID/TOKEN secrets; later runs will renew and cache it automatically.'
+      );
+      expiredError.retryable = false;
+      expiredError.yostarCode = 100403;
+      throw expiredError;
+    }
+
+    if (refreshError && !refreshError.yostarCode) {
+      error.retryable = true;
+    }
+
+    throw error;
+  }
+
+  if (refreshed && successfulCredentials) {
+    saveTokenCache(
+      {
+        uid: successfulCredentials.uid,
+        token: successfulCredentials.token,
+        deviceId: refreshed.deviceId,
+        webSdkMetadata: refreshed.metadata,
+        updatedAt: new Date().toISOString()
+      },
+      credentials.baseUid,
+      credentials.baseToken
+    );
+    console.log('validated YoStar login state saved to encrypted runtime cache');
+  }
+
+  return session;
+}
+
 async function run() {
   const credentials = loadRuntimeConfig();
   const { server } = credentials;
@@ -1143,12 +1420,15 @@ async function run() {
   for (let attempt = 1; attempt <= SESSION_BOOTSTRAP_ATTEMPTS; attempt += 1) {
     try {
       const context = await loadServerContext(server);
-      session = await createSession(context, credentials);
+      session = await createSessionWithYostarRefresh(context, credentials);
       break;
     } catch (error) {
       const shouldRetry =
         error?.retryable !== false &&
-        !(error instanceof MajsoulRpcError) &&
+        (
+          !(error instanceof MajsoulRpcError) ||
+          isConnectionQueueError(error)
+        ) &&
         !isVersionStringError(error) &&
         attempt < SESSION_BOOTSTRAP_ATTEMPTS;
 
@@ -1182,16 +1462,23 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildClientAuthenticationAttempts,
+  buildRequestConnectionPayload,
+  buildYostarCredentialCandidates,
   createSession,
+  ensureRequestConnectionPlatformField,
   getServerConfig,
   getClientVersionStringCandidates,
+  isConnectionQueueError,
   isClientVersionProbeError,
   isVersionStringError,
   loadRuntimeConfig,
   loadServerContext,
   MajsoulRpcError,
+  normalizeSecretCredential,
   requireRpcSuccess,
   run,
   runActions,
+  shouldRefreshYostarCredentials,
   shouldRetryWithOauthCode
 };

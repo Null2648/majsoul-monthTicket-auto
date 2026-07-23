@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "check:jp": "node scripts/check-jp-client-metadata.js",
+    "check:yostar": "node scripts/check-yostar-websdk.js",
     "start": "node src/index.js",
     "test": "node --test"
   },
