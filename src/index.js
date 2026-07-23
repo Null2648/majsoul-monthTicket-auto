@@ -977,14 +977,41 @@ async function createSessionWithRoutes(context, credentials) {
   fail(`All gateway routes failed: ${JSON.stringify(errors)}`);
 }
 
-async function createSession(context, credentials) {
+function buildClientAuthenticationAttempts(
+  clientVersionStringCandidates,
+  credentials,
+  maxClientVersionProbes = MAX_CLIENT_VERSION_PROBES
+) {
+  const credentialCandidates = Array.isArray(credentials)
+    ? credentials
+    : [credentials];
+
+  return clientVersionStringCandidates
+    .slice(0, maxClientVersionProbes)
+    .flatMap(clientVersionString =>
+      credentialCandidates.map((credential, credentialIndex) => ({
+        clientVersionString,
+        credential,
+        credentialIndex
+      }))
+    );
+}
+
+async function createSession(context, credentials, { onCredentialAccepted } = {}) {
   const errors = [];
   const clientVersionStringCandidates =
     context.clientVersionStringCandidates.slice(0, MAX_CLIENT_VERSION_PROBES);
-  const sessionCredentials = {
-    ...credentials,
+  const rawCredentialCandidates = Array.isArray(credentials)
+    ? credentials
+    : [credentials];
+  const sessionCredentialCandidates = rawCredentialCandidates.map(candidate => ({
+    ...candidate,
     authState: {}
-  };
+  }));
+  const attempts = buildClientAuthenticationAttempts(
+    clientVersionStringCandidates,
+    sessionCredentialCandidates
+  );
 
   if (context.clientVersionStringCandidates.length > clientVersionStringCandidates.length) {
     console.log(
@@ -992,8 +1019,12 @@ async function createSession(context, credentials) {
     );
   }
 
-  for (let index = 0; index < clientVersionStringCandidates.length; index += 1) {
-    const clientVersionString = clientVersionStringCandidates[index];
+  for (let index = 0; index < attempts.length; index += 1) {
+    const {
+      clientVersionString,
+      credential,
+      credentialIndex
+    } = attempts[index];
     const clientMetadata = buildClientMetadata({
       productVersion: context.productVersion,
       resourceVersion: context.version,
@@ -1006,11 +1037,13 @@ async function createSession(context, credentials) {
     };
 
     console.log(
-      `trying resource version: ${clientMetadata.clientVersion.resource} -> ${clientMetadata.clientVersionString}`
+      `trying resource version: ${clientMetadata.clientVersion.resource} -> ${clientMetadata.clientVersionString}${
+        credentialIndex > 0 ? ' (alternate YoStar credential)' : ''
+      }`
     );
 
     try {
-      const session = await createSessionWithRoutes(candidateContext, sessionCredentials);
+      const session = await createSessionWithRoutes(candidateContext, credential);
       saveSuccessfulClientVersion(
         context.server.key,
         {
@@ -1021,6 +1054,7 @@ async function createSession(context, credentials) {
           buildId: context.buildId
         }
       );
+      onCredentialAccepted?.(rawCredentialCandidates[credentialIndex]);
       return session;
     } catch (error) {
       const message = error?.message || String(error);
@@ -1033,6 +1067,7 @@ async function createSession(context, credentials) {
 
       errors.push({
         clientVersionString: clientMetadata.clientVersionString,
+        credentialCandidate: credentialIndex + 1,
         operation: error?.operation,
         rpcCode: error?.rpcCode,
         message
@@ -1040,7 +1075,12 @@ async function createSession(context, credentials) {
 
       console.warn(`client version rejected: ${clientMetadata.clientVersionString}`);
 
-      if (index + 1 < clientVersionStringCandidates.length) {
+      const nextAttempt = attempts[index + 1];
+
+      if (
+        nextAttempt &&
+        nextAttempt.clientVersionString !== clientVersionString
+      ) {
         await delay(CLIENT_VERSION_PROBE_DELAY_MS);
       }
     }
@@ -1287,45 +1327,32 @@ async function createSessionWithYostarRefresh(context, credentials) {
   let session;
   let successfulCredentials;
 
-  for (let index = 0; index < credentialCandidates.length; index += 1) {
-    const activeCredentials = credentialCandidates[index];
-
-    try {
-      session = await createSession(context, activeCredentials);
-      successfulCredentials = activeCredentials;
-      break;
-    } catch (error) {
-      const hasQuickLoginResponseFallback =
-        index + 1 < credentialCandidates.length &&
-        error?.yostarAuthRejected;
-
-      if (hasQuickLoginResponseFallback) {
-        console.warn(
-          'official YoStar login credential was rejected -> trying quick-login response credential'
-        );
-        continue;
+  try {
+    session = await createSession(context, credentialCandidates, {
+      onCredentialAccepted: activeCredentials => {
+        successfulCredentials = activeCredentials;
       }
-
-      if (
-        shouldRefreshYostarCredentials(error, credentials) &&
-        refreshError?.yostarCode === 100403
-      ) {
-        const expiredError = new Error(
-          'YoStar login token expired (WebSDK code 100403). ' +
-          'Issue a fresh LOGIN_UID/LOGIN_TOKEN once with test_sdk.Login and update ' +
-          'the repository UID/TOKEN secrets; later runs will renew and cache it automatically.'
-        );
-        expiredError.retryable = false;
-        expiredError.yostarCode = 100403;
-        throw expiredError;
-      }
-
-      if (refreshError && !refreshError.yostarCode) {
-        error.retryable = true;
-      }
-
-      throw error;
+    });
+  } catch (error) {
+    if (
+      shouldRefreshYostarCredentials(error, credentials) &&
+      refreshError?.yostarCode === 100403
+    ) {
+      const expiredError = new Error(
+        'YoStar login token expired (WebSDK code 100403). ' +
+        'Issue a fresh LOGIN_UID/LOGIN_TOKEN once with test_sdk.Login and update ' +
+        'the repository UID/TOKEN secrets; later runs will renew and cache it automatically.'
+      );
+      expiredError.retryable = false;
+      expiredError.yostarCode = 100403;
+      throw expiredError;
     }
+
+    if (refreshError && !refreshError.yostarCode) {
+      error.retryable = true;
+    }
+
+    throw error;
   }
 
   if (refreshed && successfulCredentials) {
@@ -1396,6 +1423,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildClientAuthenticationAttempts,
   buildYostarCredentialCandidates,
   createSession,
   getServerConfig,

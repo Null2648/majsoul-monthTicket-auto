@@ -93,6 +93,32 @@ test('oauth2Auth code 151 can trigger bounded client version recovery', () => {
   assert.equal(isClientVersionProbeError(checkError), false);
 });
 
+test('alternate YoStar credentials are tried per version before scanning onward', () => {
+  const { buildClientAuthenticationAttempts } = require('../src/index');
+  const primary = { token: 'primary' };
+  const alternate = { token: 'alternate' };
+
+  const attempts = buildClientAuthenticationAttempts(
+    ['WebGL_2022-0.16.212', 'WebGL_2022-0.16.213'],
+    [primary, alternate],
+    2
+  );
+
+  assert.deepEqual(
+    attempts.map(attempt => [
+      attempt.clientVersionString,
+      attempt.credential.token,
+      attempt.credentialIndex
+    ]),
+    [
+      ['WebGL_2022-0.16.212', 'primary', 0],
+      ['WebGL_2022-0.16.212', 'alternate', 1],
+      ['WebGL_2022-0.16.213', 'primary', 0],
+      ['WebGL_2022-0.16.213', 'alternate', 1]
+    ]
+  );
+});
+
 test('exhausted metadata candidates are marked as non-retryable', async () => {
   const { createSession } = require('../src/index');
   const context = {
