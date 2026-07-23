@@ -14,10 +14,27 @@ function parseProductVersion(html) {
 function normalizeResourceVersion(value) {
   return String(value || '')
     .trim()
-    .replace(/^WebGL_2022-/, '')
+    .replace(/^WebGL_\d{4}-/, '')
     .replace(/^web-/, '')
     .replace(/^v/, '')
     .replace(/\.w$/, '');
+}
+
+function normalizeClientVersionString(value) {
+  const normalized = String(value || '').trim();
+
+  return /^(?:WebGL_\d{4}|web)-\d+\.\d+\.\d+$/.test(normalized)
+    ? normalized
+    : null;
+}
+
+function extractClientVersionStrings(text) {
+  return [
+    ...new Set(
+      [...String(text || '').matchAll(/\b(?:WebGL_\d{4}|web)-\d+\.\d+\.\d+\b/g)]
+        .map(match => match[0])
+    )
+  ];
 }
 
 function parseResourceVersion(value) {
@@ -110,12 +127,52 @@ function buildResourceVersionCandidates({
   return candidates;
 }
 
-function buildClientMetadata({ productVersion, resourceVersion = DEFAULT_RESOURCE_VERSION }) {
+function buildClientVersionStringCandidates({
+  overrideClientVersionString,
+  detectedClientVersionStrings = [],
+  cachedClientVersionString,
+  resourceVersionCandidates = [],
+  webResourceVersion
+} = {}) {
+  const candidates = [];
+  const addCandidate = value => {
+    const normalized = normalizeClientVersionString(value);
+
+    if (normalized && !candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  };
+
+  addCandidate(overrideClientVersionString);
+  detectedClientVersionStrings.forEach(addCandidate);
+  addCandidate(cachedClientVersionString);
+  resourceVersionCandidates.forEach(resourceVersion => {
+    addCandidate(`WebGL_2022-${normalizeResourceVersion(resourceVersion)}`);
+  });
+
+  if (webResourceVersion) {
+    addCandidate(`web-${normalizeResourceVersion(webResourceVersion)}`);
+  }
+
+  return candidates;
+}
+
+function buildClientMetadata({
+  productVersion,
+  resourceVersion = DEFAULT_RESOURCE_VERSION,
+  clientVersionString
+}) {
   if (!productVersion) {
     throw new Error('productVersion is required');
   }
 
-  const resolvedResourceVersion = normalizeResourceVersion(resourceVersion);
+  const resolvedClientVersionString =
+    normalizeClientVersionString(clientVersionString) ||
+    `WebGL_2022-${normalizeResourceVersion(resourceVersion)}`;
+  const resolvedResourceVersion = normalizeResourceVersion(
+    clientVersionString || resourceVersion
+  );
+
   if (!resolvedResourceVersion) {
     throw new Error('resourceVersion is required');
   }
@@ -126,7 +183,7 @@ function buildClientMetadata({ productVersion, resourceVersion = DEFAULT_RESOURC
       resource: resolvedResourceVersion,
       package: productVersion
     },
-    clientVersionString: `WebGL_2022-${resolvedResourceVersion}`
+    clientVersionString: resolvedClientVersionString
   };
 }
 
@@ -191,10 +248,13 @@ function buildPasswordLoginPayload({
 module.exports = {
   DEFAULT_RESOURCE_VERSION,
   buildClientMetadata,
+  buildClientVersionStringCandidates,
   buildResourceVersionCandidates,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
+  extractClientVersionStrings,
+  normalizeClientVersionString,
   normalizeResourceVersion,
   parseResourceVersion,
   parseProductVersion

@@ -7,10 +7,13 @@ const protobuf = require('protobufjs/light');
 const WebSocket = require('ws');
 const {
   buildClientMetadata,
+  buildClientVersionStringCandidates,
   buildResourceVersionCandidates,
   buildOauth2AuthPayload,
   buildOauth2LoginPayload,
   buildPasswordLoginPayload,
+  extractClientVersionStrings,
+  normalizeResourceVersion,
   parseProductVersion
 } = require('./client-metadata');
 
@@ -23,6 +26,7 @@ const BUY_FROM_ZHP_LIMIT_REACHED_CODE = 2402;
 const CLIENT_VERSION_MISMATCH_CODE = 151;
 const HTTP_REQUEST_ATTEMPTS = 3;
 const HTTP_REQUEST_TIMEOUT_MS = 15000;
+const CLIENT_SCRIPT_REQUEST_TIMEOUT_MS = 60000;
 const SESSION_BOOTSTRAP_ATTEMPTS = 3;
 const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
 
@@ -194,15 +198,19 @@ function getServerConfig(serverKey) {
 }
 
 async function requestWithRetry(url, options = {}) {
+  const {
+    timeoutMs = HTTP_REQUEST_TIMEOUT_MS,
+    ...fetchOptions
+  } = options;
   let lastError;
 
   for (let attempt = 1; attempt <= HTTP_REQUEST_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
-        ...options,
+        ...fetchOptions,
         signal: controller.signal
       });
 
@@ -289,6 +297,10 @@ function getOverrideResourceVersion() {
   return process.env.MS_RESOURCE_VERSION || process.env.RESOURCE_VERSION || null;
 }
 
+function getOverrideClientVersionString() {
+  return process.env.MS_CLIENT_VERSION_STRING || process.env.CLIENT_VERSION_STRING || null;
+}
+
 function readResourceVersionCache() {
   try {
     if (!fs.existsSync(RESOURCE_VERSION_CACHE_PATH)) {
@@ -302,34 +314,60 @@ function readResourceVersionCache() {
   }
 }
 
-function saveSuccessfulResourceVersion(serverKey, resourceVersion) {
-  if (!serverKey || !resourceVersion) {
+function saveSuccessfulClientVersion(serverKey, resourceVersion, clientVersionString) {
+  if (!serverKey || !resourceVersion || !clientVersionString) {
     return;
   }
 
   const cache = readResourceVersionCache();
 
-  if (cache[serverKey] === resourceVersion) {
+  if (
+    cache[serverKey] === resourceVersion &&
+    cache.clientVersionStrings?.[serverKey] === clientVersionString
+  ) {
     return;
   }
 
   cache[serverKey] = resourceVersion;
+  cache.clientVersionStrings = {
+    ...cache.clientVersionStrings,
+    [serverKey]: clientVersionString
+  };
   cache.updatedAt = new Date().toISOString();
 
   fs.writeFileSync(RESOURCE_VERSION_CACHE_PATH, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
 
-  console.log(`resource version cache saved -> ${serverKey}: ${resourceVersion}`);
+  console.log(
+    `client version cache saved -> ${serverKey}: ${clientVersionString} (resource ${resourceVersion})`
+  );
 }
 
-function getResourceVersionCandidates({ serverKey, detectedResourceVersion }) {
+function getClientVersionStringCandidates({
+  serverKey,
+  detectedClientVersionStrings,
+  webResourceVersion
+}) {
   const cache = readResourceVersionCache();
   const cachedResourceVersion = cache[serverKey];
+  const cachedClientVersionString = cache.clientVersionStrings?.[serverKey];
   const overrideResourceVersion = getOverrideResourceVersion();
-
-  return buildResourceVersionCandidates({
+  const detectedResourceVersion = detectedClientVersionStrings
+    .map(normalizeResourceVersion)
+    .filter(Boolean)
+    .sort(compareDottedVersions)
+    .at(-1);
+  const resourceVersionCandidates = buildResourceVersionCandidates({
     cachedResourceVersion,
     detectedResourceVersion,
     overrideResourceVersion
+  });
+
+  return buildClientVersionStringCandidates({
+    overrideClientVersionString: getOverrideClientVersionString(),
+    detectedClientVersionStrings,
+    cachedClientVersionString,
+    resourceVersionCandidates,
+    webResourceVersion
   });
 }
 
@@ -369,8 +407,19 @@ function buildUpgradeInfoUrl(gatewayUrl, version, lang) {
   return url;
 }
 
-async function resolveResourceVersion(server, { gatewayUrl, productVersion, routeLang } = {}) {
+async function resolveClientVersionStrings(
+  server,
+  { clientScriptUrl, gatewayUrl, productVersion, routeLang } = {}
+) {
   const sources = [];
+
+  if (clientScriptUrl) {
+    sources.push({
+      name: 'official client script',
+      url: clientScriptUrl,
+      timeoutMs: CLIENT_SCRIPT_REQUEST_TIMEOUT_MS
+    });
+  }
 
   if (gatewayUrl && productVersion) {
     sources.push({
@@ -393,22 +442,33 @@ async function resolveResourceVersion(server, { gatewayUrl, productVersion, rout
 
   for (const source of sources) {
     try {
-      const text = await requestText(source.url);
+      const text = await requestText(source.url, {
+        timeoutMs: source.timeoutMs
+      });
+      const clientVersionStrings = extractClientVersionStrings(text);
+
+      if (clientVersionStrings.length) {
+        console.log(
+          `client version string auto-detected from ${source.name} -> ${clientVersionStrings.join(', ')}`
+        );
+        return clientVersionStrings;
+      }
+
       const resourceVersion = extractResourceVersion(text);
 
       if (resourceVersion) {
         console.log(`resource version auto-detected from ${source.name} -> ${resourceVersion}`);
-        return resourceVersion;
+        return [`WebGL_2022-${resourceVersion}`];
       }
 
-      console.warn(`resource version source has no 0.x.x value: ${source.name}`);
+      console.warn(`client version source has no supported version value: ${source.name}`);
     } catch (error) {
-      console.warn(`resource version source failed: ${source.name}: ${error?.message || error}`);
+      console.warn(`client version source failed: ${source.name}: ${error?.message || error}`);
     }
   }
 
-  console.warn('resource version auto-detect failed; using cached/scan candidates');
-  return null;
+  console.warn('client version auto-detect failed; using cached/fallback candidates');
+  return [];
 }
 
 function loadProtoTypes(liqiJson) {
@@ -454,6 +514,7 @@ async function loadServerContext(server) {
 
   const version = versionInfo.version;
   const codeDir = must(String(versionInfo.code || '').split('/')[0], 'Missing code directory for config fetch');
+  const clientScriptUrl = buildUrl(base, versionInfo.code);
   const productVersion = parseProductVersion(indexHtml);
 
   const [config, resManifest] = await Promise.all([
@@ -472,21 +533,25 @@ async function loadServerContext(server) {
     'Gateway URL missing from config'
   ).replace(/\/+$/, '');
 
-  const detectedResourceVersion = await resolveResourceVersion(server, {
+  const detectedClientVersionStrings = await resolveClientVersionStrings(server, {
+    clientScriptUrl,
     gatewayUrl,
     productVersion,
     routeLang
   });
 
-  const resourceVersionCandidates = getResourceVersionCandidates({
+  const clientVersionStringCandidates = getClientVersionStringCandidates({
     serverKey: server.key,
-    detectedResourceVersion
+    detectedClientVersionStrings,
+    webResourceVersion: version
   });
 
   console.log(`version.json -> version=${version} force_version=${versionInfo.force_version} code=${versionInfo.code}`);
   console.log(
-    `resource version candidates -> ${resourceVersionCandidates.slice(0, 8).join(', ')}${
-      resourceVersionCandidates.length > 8 ? ` ... total=${resourceVersionCandidates.length}` : ''
+    `client version candidates -> ${clientVersionStringCandidates.slice(0, 8).join(', ')}${
+      clientVersionStringCandidates.length > 8
+        ? ` ... total=${clientVersionStringCandidates.length}`
+        : ''
     }`
   );
 
@@ -514,7 +579,7 @@ async function loadServerContext(server) {
     routes: routesToTry,
     version,
     productVersion,
-    resourceVersionCandidates,
+    clientVersionStringCandidates,
     proto: loadProtoTypes(liqiJson)
   };
 }
@@ -838,10 +903,10 @@ async function createSessionWithRoutes(context, credentials) {
 async function createSession(context, credentials) {
   const errors = [];
 
-  for (const resourceVersion of context.resourceVersionCandidates) {
+  for (const clientVersionString of context.clientVersionStringCandidates) {
     const clientMetadata = buildClientMetadata({
       productVersion: context.productVersion,
-      resourceVersion
+      clientVersionString
     });
 
     const candidateContext = {
@@ -855,22 +920,27 @@ async function createSession(context, credentials) {
 
     try {
       const session = await createSessionWithRoutes(candidateContext, credentials);
-      saveSuccessfulResourceVersion(context.server.key, clientMetadata.clientVersion.resource);
+      saveSuccessfulClientVersion(
+        context.server.key,
+        clientMetadata.clientVersion.resource,
+        clientMetadata.clientVersionString
+      );
       return session;
     } catch (error) {
       const message = error?.message || String(error);
 
       if (!isVersionStringError(error)) {
-        error.resourceVersion = resourceVersion;
+        error.resourceVersion = clientMetadata.clientVersion.resource;
+        error.clientVersionString = clientMetadata.clientVersionString;
         throw error;
       }
 
       errors.push({
-        resourceVersion: clientMetadata.clientVersion.resource,
+        clientVersionString: clientMetadata.clientVersionString,
         message
       });
 
-      console.warn(`resource version failed: ${clientMetadata.clientVersion.resource}`);
+      console.warn(`client version failed: ${clientMetadata.clientVersionString}`);
     }
   }
 
@@ -1034,7 +1104,7 @@ if (require.main === module) {
 module.exports = {
   createSession,
   getServerConfig,
-  getResourceVersionCandidates,
+  getClientVersionStringCandidates,
   isVersionStringError,
   loadRuntimeConfig,
   loadServerContext,
