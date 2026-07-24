@@ -31,7 +31,7 @@ This project automates daily logins to Majsoul to achieve the attendance achieve
 5. If you use the `jp`, `en`, or `kr` server, click `New repository secret` again and add `UID` and `TOKEN`. An existing `ACCESS_TOKEN` is reused first, with automatic reauthorization through `UID` and `TOKEN` if it is rejected.
 6. If you use the `cn` server, click `New repository secret` again and add `EMAIL` and `PASSWORD` with your account email and plaintext password.
 7. Go to `Settings > Actions > General` and change `Workflow permissions` to `Read and write permissions`.
-8. The default run time is 6:05 AM JST every day. To change it, edit the `cron` value in `.github/workflows/main.yml`.
+8. Scheduled attendance runs at 6:17 AM in the `Asia/Seoul` timezone, with a 6:47 AM fallback. After a successful scheduled run, the fallback checks the saved date and exits without logging in again. To change the schedule, edit the `cron` and `timezone` values in `.github/workflows/main.yml`.
 9. Open the `Actions` tab and click `I understand my workflows, go ahead and enable them` to enable workflows.
 10. Select `Login to Majsoul` from the left-side `Workflows` list and click `Enable workflow`.
 
@@ -49,7 +49,7 @@ This project automates daily logins to Majsoul to achieve the attendance achieve
 - The current Unity client no longer exposes the old `game`/`Laya` globals, so use the `test_sdk.Login` method above.
 
 ## Caution
-- GitHub Actions may be delayed by up to 30 minutes depending on GitHub server load.
+- GitHub Actions scheduled workflows can be delayed or dropped during periods of high load. The fallback schedule reduces this risk, but an exact start time is not guaranteed.
 - Be careful not to expose your access token or other credentials to anyone.
 
 ## Contact
