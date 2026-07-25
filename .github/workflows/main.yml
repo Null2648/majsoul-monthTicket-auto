@@ -88,14 +88,22 @@ jobs:
 
       - name: Generate current protocol baseline
         if: github.event_name == 'pull_request'
-        run: npm run check:protocol -- --write-baseline
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check:protocol -- --write-baseline 2>&1 | tee protocol-check.log
 
-      - name: Upload generated protocol baseline
-        if: github.event_name == 'pull_request' && success()
+      - name: Upload protocol diagnostics
+        if: github.event_name == 'pull_request' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: generated-protocol-snapshot
-          path: protocol-snapshot.json
+          name: protocol-monitor-diagnostics
+          path: |
+            protocol-check.log
+            protocol-snapshot.json
+            .protocol-snapshot.pending.json
+            protocol-change-report.json
+          if-no-files-found: warn
           retention-days: 3
 
       - name: Upload protocol change report
