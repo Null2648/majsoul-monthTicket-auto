@@ -36,6 +36,7 @@ concurrency:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   run-script:
@@ -75,18 +76,22 @@ jobs:
         run: npm ci
 
       - name: Run tests
+        id: tests
         if: github.event_name != 'schedule' || steps.attendance.outputs.should_run == 'true'
         run: npm test
 
       - name: Check current JP client metadata
+        id: jp
         if: github.event_name == 'pull_request'
         run: npm run check:jp
 
       - name: Check current YoStar WebSDK metadata
+        id: yostar
         if: github.event_name == 'pull_request'
         run: npm run check:yostar
 
       - name: Validate current protocol contract
+        id: protocol
         if: github.event_name == 'pull_request'
         run: npm run check:protocol -- --write-baseline
 
@@ -107,6 +112,7 @@ jobs:
           retention-days: 14
 
       - name: Execute month ticket automation
+        id: automation
         if: >-
           github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'schedule' && steps.attendance.outputs.should_run == 'true')
@@ -121,6 +127,7 @@ jobs:
           MS_SERVER: ${{ secrets.MS_SERVER }}
 
       - name: Update Keep-Alive and Runtime Cache
+        id: cache
         if: >-
           success() &&
           (github.event_name == 'workflow_dispatch' ||
@@ -142,3 +149,35 @@ jobs:
           git push origin "HEAD:${GITHUB_REF_NAME}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload automation failure diagnostics
+        if: >-
+          always() &&
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+          (hashFiles('automation-failure-report.json') != '' ||
+          hashFiles('protocol-change-report.json') != '')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-failure-diagnostics-${{ github.run_id }}
+          path: |
+            automation-failure-report.json
+            protocol-change-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Report automation status
+        if: >-
+          always() &&
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        continue-on-error: true
+        run: node scripts/report-automation-status.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          JP_OUTCOME: ${{ steps.jp.outcome }}
+          YOSTAR_OUTCOME: ${{ steps.yostar.outcome }}
+          PROTOCOL_OUTCOME: ${{ steps.protocol.outcome }}
+          AUTOMATION_OUTCOME: ${{ steps.automation.outcome }}
+          CACHE_OUTCOME: ${{ steps.cache.outcome }}

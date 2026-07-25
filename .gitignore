@@ -3,5 +3,6 @@ node_modules/
 protocol.md
 .protocol-snapshot.pending.json
 protocol-change-report.json
+automation-failure-report.json
 
 *.har
