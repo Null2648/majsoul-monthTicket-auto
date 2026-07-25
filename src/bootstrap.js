@@ -1,13 +1,32 @@
 const {
   prepareOfficialStructureFallbacks
 } = require('./official-structure-fallbacks');
+const {
+  finalizeProtocolSnapshot,
+  prepareProtocolMonitor
+} = require('./protocol-monitor');
 
 async function bootstrap() {
+  let structure;
+  let protocolPrepared = false;
+
   try {
-    await prepareOfficialStructureFallbacks();
+    structure = await prepareOfficialStructureFallbacks();
   } catch (error) {
     console.warn(
       `official structure discovery unavailable: ${error?.message || error}; continuing with legacy paths`
+    );
+  }
+
+  try {
+    await prepareProtocolMonitor({ structure });
+    protocolPrepared = true;
+  } catch (error) {
+    if (error?.code === 'PROTOCOL_BREAKING_CHANGE') {
+      throw error;
+    }
+    console.warn(
+      `protocol monitor unavailable: ${error?.message || error}; continuing with the live protocol loader`
     );
   }
 
@@ -24,6 +43,13 @@ async function bootstrap() {
 
   const { run } = require('./index');
   await run();
+
+  if (protocolPrepared) {
+    const changed = finalizeProtocolSnapshot();
+    if (changed) {
+      console.log('protocol baseline updated after successful attendance');
+    }
+  }
 }
 
 if (require.main === module) {
