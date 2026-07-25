@@ -1,9 +1,20 @@
 const {
-  prepareOfficialClientVersionDiscovery
-} = require('./official-client-version');
+  prepareOfficialStructureFallbacks
+} = require('./official-structure-fallbacks');
 
 async function bootstrap() {
   try {
+    await prepareOfficialStructureFallbacks();
+  } catch (error) {
+    console.warn(
+      `official structure discovery unavailable: ${error?.message || error}; continuing with legacy paths`
+    );
+  }
+
+  try {
+    const {
+      prepareOfficialClientVersionDiscovery
+    } = require('./official-client-version');
     await prepareOfficialClientVersionDiscovery();
   } catch (error) {
     console.warn(
