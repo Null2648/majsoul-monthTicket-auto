@@ -1,22 +1,37 @@
 const {
+  installGlobalMetadataFetchGuard,
+  scopeStructureFetch
+} = require('./network-hardening');
+const {
   prepareOfficialStructureFallbacks
 } = require('./official-structure-fallbacks');
 const {
   finalizeProtocolSnapshot,
   prepareProtocolMonitor
-} = require('./protocol-monitor');
+} = require('./protocol-monitor-hardened');
 const {
   clearAutomationFailureReport,
   writeAutomationFailureReport
 } = require('./automation-alert');
 
+function installHardenedYostarExports() {
+  const current = require('./yostar-websdk');
+  const hardened = require('./yostar-websdk-hardened');
+  current.loadOfficialWebSdkMetadata = hardened.loadOfficialWebSdkMetadata;
+  current.loadOfficialWebSdkMetadataCandidates = hardened.loadOfficialWebSdkMetadataCandidates;
+  current.refreshYostarCredentials = hardened.refreshYostarCredentials;
+}
+
 async function bootstrap() {
   let structure;
   let protocolPrepared = false;
   clearAutomationFailureReport();
+  installGlobalMetadataFetchGuard();
+  installHardenedYostarExports();
 
   try {
     structure = await prepareOfficialStructureFallbacks();
+    scopeStructureFetch(structure);
   } catch (error) {
     console.warn(
       `official structure discovery unavailable: ${error?.message || error}; continuing with legacy paths`
@@ -27,9 +42,7 @@ async function bootstrap() {
     await prepareProtocolMonitor({ structure });
     protocolPrepared = true;
   } catch (error) {
-    if (error?.code === 'PROTOCOL_BREAKING_CHANGE') {
-      throw error;
-    }
+    if (error?.code === 'PROTOCOL_BREAKING_CHANGE') throw error;
     console.warn(
       `protocol monitor unavailable: ${error?.message || error}; continuing with the live protocol loader`
     );
@@ -51,9 +64,7 @@ async function bootstrap() {
 
   if (protocolPrepared) {
     const changed = finalizeProtocolSnapshot();
-    if (changed) {
-      console.log('protocol baseline updated after successful attendance');
-    }
+    if (changed) console.log('protocol baseline updated after successful attendance');
   }
 }
 
@@ -69,4 +80,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { bootstrap };
+module.exports = { bootstrap, installHardenedYostarExports };

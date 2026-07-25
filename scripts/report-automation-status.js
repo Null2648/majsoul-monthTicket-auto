@@ -7,28 +7,22 @@ const {
   buildFailureComment,
   buildRecoveryComment,
   readJsonFile,
-  sanitizeText,
+  sanitizeMarkdownText,
   shouldNotifyFailure
-} = require('../src/automation-alert');
+} = require('../src/automation-alert-hardened');
 const {
   PROTOCOL_REPORT_PATH
-} = require('../src/protocol-monitor');
+} = require('../src/protocol-monitor-hardened');
 
 function readEventPayload(filePath = process.env.GITHUB_EVENT_PATH) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return {}; }
 }
 
 function getFailureContext() {
   const event = readEventPayload();
   const automationReport = readJsonFile(AUTOMATION_FAILURE_REPORT_PATH);
   const protocolReport = readJsonFile(PROTOCOL_REPORT_PATH);
-  const protocolBreaking = Array.isArray(protocolReport?.breaking)
-    ? protocolReport.breaking
-    : [];
+  const protocolBreaking = Array.isArray(protocolReport?.breaking) ? protocolReport.breaking : [];
   const outcomes = {
     tests: process.env.TESTS_OUTCOME,
     jp: process.env.JP_OUTCOME,
@@ -48,24 +42,18 @@ function getFailureContext() {
   if (!classification) classification = 'runtime';
 
   const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-  const lastSuccess = (() => {
-    try {
-      return fs.readFileSync('last-attendance-kst.txt', 'utf8').trim() || null;
-    } catch {
-      return null;
-    }
-  })();
+  let lastSuccess = null;
+  try { lastSuccess = fs.readFileSync('last-attendance-kst.txt', 'utf8').trim() || null; } catch { /* no successful run yet */ }
 
   return {
     eventName: process.env.GITHUB_EVENT_NAME,
     schedule: event.schedule || '',
     classification,
-    summary: sanitizeText(
-      automationReport?.summary ||
-      protocolBreaking[0] ||
+    summary: sanitizeMarkdownText(
+      automationReport?.summary || protocolBreaking[0] ||
       `Workflow job ended with status ${process.env.JOB_STATUS || 'unknown'}`
     ),
-    protocolBreaking,
+    protocolBreaking: protocolBreaking.map(item => sanitizeMarkdownText(item)),
     outcomes,
     runUrl,
     sha: process.env.GITHUB_SHA,
@@ -77,7 +65,6 @@ function getFailureContext() {
 async function githubApi(pathname, { method = 'GET', body } = {}) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error('GITHUB_TOKEN is required for issue notifications');
-
   const response = await fetch(`https://api.github.com${pathname}`, {
     method,
     headers: {
@@ -90,37 +77,32 @@ async function githubApi(pathname, { method = 'GET', body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(15000)
   });
-
   const text = await response.text();
   let payload = null;
   if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = text;
-    }
+    try { payload = JSON.parse(text); } catch { payload = text; }
   }
-
   if (!response.ok) {
-    throw new Error(`GitHub API ${method} ${pathname} failed: ${response.status} ${sanitizeText(text)}`);
+    throw new Error(`GitHub API ${method} ${pathname} failed: ${response.status} ${sanitizeMarkdownText(text)}`);
   }
-
   return payload;
 }
 
 async function findOpenIncident(owner, repo) {
-  const issues = await githubApi(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&per_page=100`
-  );
-
-  return issues.find(issue =>
-    !issue.pull_request &&
-    issue.title === INCIDENT_TITLE &&
-    String(issue.body || '').includes(INCIDENT_MARKER)
-  ) || null;
+  for (let page = 1; page <= 5; page += 1) {
+    const issues = await githubApi(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&per_page=100&page=${page}`
+    );
+    const incident = issues.find(issue =>
+      !issue.pull_request && issue.title === INCIDENT_TITLE && String(issue.body || '').includes(INCIDENT_MARKER)
+    );
+    if (incident) return incident;
+    if (issues.length < 100) break;
+  }
+  return null;
 }
 
-async function addIssueComment(owner, repo, issueNumber, body) {
+function addIssueComment(owner, repo, issueNumber, body) {
   return githubApi(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments`,
     { method: 'POST', body: { body } }
@@ -131,54 +113,33 @@ async function run() {
   const repository = String(process.env.GITHUB_REPOSITORY || '');
   const [owner, repo] = repository.split('/');
   if (!owner || !repo) throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
-
   const context = getFailureContext();
   const jobSucceeded = process.env.JOB_STATUS === 'success';
   const incident = await findOpenIncident(owner, repo);
 
   if (jobSucceeded) {
-    if (!incident) {
-      console.log('automation status notification -> no open incident to close');
-      return;
-    }
-
-    await addIssueComment(
-      owner,
-      repo,
-      incident.number,
-      buildRecoveryComment(context)
-    );
+    if (!incident) return console.log('automation status notification -> no open incident to close');
+    await addIssueComment(owner, repo, incident.number, buildRecoveryComment(context));
     await githubApi(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${incident.number}`,
       { method: 'PATCH', body: { state: 'closed', state_reason: 'completed' } }
     );
-    console.log(`automation status notification -> closed recovered incident #${incident.number}`);
-    return;
+    return console.log(`automation status notification -> closed recovered incident #${incident.number}`);
   }
 
   if (!shouldNotifyFailure(context)) {
-    console.log(
+    return console.log(
       `automation status notification -> primary transient failure deferred until fallback (${context.classification})`
     );
-    return;
   }
-
   if (incident) {
     await addIssueComment(owner, repo, incident.number, buildFailureComment(context));
-    console.log(`automation status notification -> appended failure to incident #${incident.number}`);
-    return;
+    return console.log(`automation status notification -> appended failure to incident #${incident.number}`);
   }
-
-  const created = await githubApi(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
-    {
-      method: 'POST',
-      body: {
-        title: INCIDENT_TITLE,
-        body: buildFailureBody(context)
-      }
-    }
-  );
+  const created = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`, {
+    method: 'POST',
+    body: { title: INCIDENT_TITLE, body: buildFailureBody(context) }
+  });
   console.log(`automation status notification -> created incident #${created.number}`);
 }
 
@@ -189,10 +150,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = {
-  findOpenIncident,
-  getFailureContext,
-  githubApi,
-  readEventPayload,
-  run
-};
+module.exports = { findOpenIncident, getFailureContext, githubApi, readEventPayload, run };
