@@ -39,15 +39,15 @@ test('official JavaScript assets include version code and Unity loader only once
   ]);
 });
 
-test('exact official strings are collected from index, code and loader assets', async () => {
+test('official Unity prefix is combined with the official product version', async () => {
   const bodies = new Map([
-    ['https://game.example/v0.20.1/code.js', 'client_version_string:"WebGL_2023-0.20.1"'],
+    ['https://game.example/v0.20.1/code.js', 'const clientPrefix="WebGL_2023-";'],
     ['https://game.example/Build/client.loader.js', 'const fallback="web-0.20.1";']
   ]);
   const result = await discoverOfficialClientVersionStrings({
     base: 'https://game.example/',
     versionInfo: { code: 'v0.20.1/code.js' },
-    indexHtml: '<script src="Build/client.loader.js"></script>',
+    indexHtml: '<script>createUnityInstance(canvas,{productVersion:"4.1.2"})</script><script src="Build/client.loader.js"></script>',
     fetchImpl: async url => response(bodies.get(String(url)) || '', {
       status: bodies.has(String(url)) ? 200 : 404
     }),
@@ -55,10 +55,13 @@ test('exact official strings are collected from index, code and loader assets', 
   });
 
   assert.deepEqual(result.strings, [
-    'WebGL_2023-0.20.1',
+    'WebGL_2023-4.1.2',
     'web-0.20.1'
   ]);
-  assert.equal(result.sources['WebGL_2023-0.20.1'], '/v0.20.1/code.js');
+  assert.equal(
+    result.sources['WebGL_2023-4.1.2'],
+    '/v0.20.1/code.js#prefix+productVersion'
+  );
 });
 
 test('discovered exact strings are inserted ahead of generated detected candidates', () => {
