@@ -377,9 +377,36 @@ function writeJsonFile(filePath, value) {
 }
 
 async function fetchCurrentProtocol(structure, { logger = console } = {}) {
-  const requestedUrl = new URL('res/proto/liqi.json', structure.base);
+  const headers = {
+    Accept: 'application/json,*/*;q=0.8',
+    'User-Agent': 'Mozilla/5.0'
+  };
+  let requestedUrl = new URL('res/proto/liqi.json', structure.base);
+
+  if (structure.version) {
+    const manifestUrl = new URL(`resversion${structure.version}.json`, structure.base);
+    try {
+      const manifestResponse = await global.fetch(manifestUrl, {
+        headers,
+        signal: AbortSignal.timeout(15000)
+      });
+      if (manifestResponse.ok) {
+        const manifest = await manifestResponse.json();
+        const prefix = manifest?.res?.['res/proto/liqi.json']?.prefix;
+        if (prefix) {
+          requestedUrl = new URL(
+            `${String(prefix).replace(/^\/+|\/+$/g, '')}/res/proto/liqi.json`,
+            structure.base
+          );
+        }
+      }
+    } catch (error) {
+      logger.warn?.(`protocol manifest lookup failed: ${error?.message || error}`);
+    }
+  }
+
   const response = await global.fetch(requestedUrl, {
-    headers: { Accept: 'application/json,*/*;q=0.8', 'User-Agent': 'Mozilla/5.0' },
+    headers,
     signal: AbortSignal.timeout(15000)
   });
   if (!response.ok) {
