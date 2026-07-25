@@ -82,6 +82,15 @@ jobs:
           npm run check:jp
           npm run check:yostar
 
+      - name: Upload JP client metadata diagnostics
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jp-client-metadata-diagnostics
+          path: client-version-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Execute month ticket automation
         if: >-
           github.event_name == 'workflow_dispatch' ||
