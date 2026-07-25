@@ -82,12 +82,34 @@ jobs:
           npm run check:jp
           npm run check:yostar
 
+      - name: Capture JP client assets for diagnostics
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          [[ -f client-version-diagnostics.json ]] || exit 0
+          mkdir -p jp-client-assets
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const diagnostics = JSON.parse(fs.readFileSync('client-version-diagnostics.json', 'utf8'));
+          for (const [index, url] of diagnostics.assetUrls.entries()) {
+            const response = await fetch(url);
+            if (!response.ok) continue;
+            const bytes = Buffer.from(await response.arrayBuffer());
+            const pathname = new URL(url).pathname;
+            const name = `${index}-${path.basename(pathname)}`;
+            fs.writeFileSync(path.join('jp-client-assets', name), bytes);
+          }
+          NODE
+
       - name: Upload JP client metadata diagnostics
         if: always() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: jp-client-metadata-diagnostics
-          path: client-version-diagnostics.json
+          path: |
+            client-version-diagnostics.json
+            jp-client-assets/
           if-no-files-found: ignore
           retention-days: 3
 
