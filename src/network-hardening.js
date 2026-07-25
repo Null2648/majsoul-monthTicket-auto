@@ -23,7 +23,7 @@ function responseLimit(url, method = 'GET') {
   if (/\/index\.html$/.test(pathname)) return 4 * 1024 * 1024;
   if (/liqi(?:\.min)?\.json$/.test(pathname)) return 24 * 1024 * 1024;
   if (/(?:resversion|resource[-_.]?version|resmanifest|manifest)[^/]*\.json$/.test(pathname)) {
-    return 12 * 1024 * 1024;
+    return 32 * 1024 * 1024;
   }
   if (/(?:^|\/)(?:client[-_.]?)?config(?:uration)?[^/]*\.json$/.test(pathname)) {
     return 4 * 1024 * 1024;
