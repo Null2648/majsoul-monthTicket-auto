@@ -61,7 +61,23 @@ jobs:
         run: npm ci
 
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        id: audit
+        shell: bash
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high --json > npm-audit.json
+          status=$?
+          set -e
+          cat npm-audit.json
+          exit "${status}"
+
+      - name: Upload dependency audit report
+        if: failure() && hashFiles('npm-audit.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-audit-report-${{ github.run_id }}
+          path: npm-audit.json
+          retention-days: 14
 
       - name: Run tests
         run: npm test
