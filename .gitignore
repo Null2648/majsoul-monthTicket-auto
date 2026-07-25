@@ -1,5 +1,7 @@
 node_modules/
 .env
 protocol.md
+.protocol-snapshot.pending.json
+protocol-change-report.json
 
 *.har
