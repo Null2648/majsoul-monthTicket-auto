@@ -35,17 +35,75 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 jobs:
-  run-script:
+  validate:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check current JP client metadata
+        run: npm run check:jp
+
+      - name: Check current YoStar WebSDK metadata
+        run: npm run check:yostar
+
+      - name: Validate current protocol contract
+        run: npm run check:protocol -- --write-baseline
+
+      - name: Upload generated protocol snapshot
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-protocol-snapshot
+          path: protocol-snapshot.json
+          retention-days: 3
+
+      - name: Upload protocol change report
+        if: failure() && hashFiles('protocol-change-report.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: protocol-change-report
+          path: protocol-change-report.json
+          retention-days: 14
+
+  attendance:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout repository without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Check scheduled attendance state
         id: attendance
@@ -66,7 +124,7 @@ jobs:
 
       - name: Set up Node.js
         if: github.event_name != 'schedule' || steps.attendance.outputs.should_run == 'true'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
           package-manager-cache: false
@@ -79,37 +137,6 @@ jobs:
         id: tests
         if: github.event_name != 'schedule' || steps.attendance.outputs.should_run == 'true'
         run: npm test
-
-      - name: Check current JP client metadata
-        id: jp
-        if: github.event_name == 'pull_request'
-        run: npm run check:jp
-
-      - name: Check current YoStar WebSDK metadata
-        id: yostar
-        if: github.event_name == 'pull_request'
-        run: npm run check:yostar
-
-      - name: Validate current protocol contract
-        id: protocol
-        if: github.event_name == 'pull_request'
-        run: npm run check:protocol -- --write-baseline
-
-      - name: Upload generated protocol snapshot
-        if: github.event_name == 'pull_request' && success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-protocol-snapshot
-          path: protocol-snapshot.json
-          retention-days: 3
-
-      - name: Upload protocol change report
-        if: failure() && hashFiles('protocol-change-report.json') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: protocol-change-report
-          path: protocol-change-report.json
-          retention-days: 14
 
       - name: Execute month ticket automation
         id: automation
@@ -134,30 +161,35 @@ jobs:
           (github.event_name == 'schedule' && steps.attendance.outputs.should_run == 'true'))
         shell: bash
         run: |
+          set -euo pipefail
           echo "Last run: $(date --iso-8601=seconds)" > keep_alive.txt
 
           if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
             TZ=Asia/Seoul date +%F > last-attendance-kst.txt
           fi
 
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add keep_alive.txt resource-version.json auth-cache.json protocol-snapshot.json
           [[ -f last-attendance-kst.txt ]] && git add last-attendance-kst.txt
           git diff --cached --quiet || git commit -m "Update runtime cache [skip ci]"
+
+          auth="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${auth}"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          trap 'git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true' EXIT
           git pull --rebase origin "${GITHUB_REF_NAME}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Upload automation failure diagnostics
         if: >-
           always() &&
-          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
           (hashFiles('automation-failure-report.json') != '' ||
           hashFiles('protocol-change-report.json') != '')
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: automation-failure-diagnostics-${{ github.run_id }}
           path: |
@@ -167,17 +199,15 @@ jobs:
           retention-days: 14
 
       - name: Report automation status
-        if: >-
-          always() &&
-          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: always()
         continue-on-error: true
         run: node scripts/report-automation-status.js
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
-          JP_OUTCOME: ${{ steps.jp.outcome }}
-          YOSTAR_OUTCOME: ${{ steps.yostar.outcome }}
-          PROTOCOL_OUTCOME: ${{ steps.protocol.outcome }}
+          JP_OUTCOME: skipped
+          YOSTAR_OUTCOME: skipped
+          PROTOCOL_OUTCOME: skipped
           AUTOMATION_OUTCOME: ${{ steps.automation.outcome }}
           CACHE_OUTCOME: ${{ steps.cache.outcome }}
