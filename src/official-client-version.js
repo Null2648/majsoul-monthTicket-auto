@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const clientMetadata = require('./client-metadata');
 
@@ -11,6 +13,7 @@ const MAX_OFFICIAL_ASSETS = 8;
 const MAX_ASSET_BYTES = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15000;
 const PATCH_STATE = Symbol.for('majsoul.officialClientVersionDiscovery');
+const RESOURCE_VERSION_CACHE_PATH = path.join(process.cwd(), 'resource-version.json');
 
 function normalizeServerKey(value) {
   return String(value || 'jp').trim().toLowerCase();
@@ -427,6 +430,43 @@ function extractComputedClientVersionStrings(text, resourceVersion) {
   return results;
 }
 
+function readCurrentSuccessfulClientVersion({
+  serverKey,
+  versionInfo,
+  indexHtml,
+  cachePath = RESOURCE_VERSION_CACHE_PATH
+}) {
+  try {
+    if (!fs.existsSync(cachePath)) {
+      return null;
+    }
+
+    const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    const productVersion = clientMetadata.parseProductVersion(indexHtml);
+    const buildId = clientMetadata.parseUnityBuildId(indexHtml);
+    const cachedClientVersionString = clientMetadata.normalizeClientVersionString(
+      cache.clientVersionStrings?.[serverKey]
+    );
+
+    if (
+      cache.sourceVersions?.[serverKey] !== versionInfo?.version ||
+      cache.productVersions?.[serverKey] !== productVersion ||
+      cache.buildIds?.[serverKey] !== buildId ||
+      !cachedClientVersionString
+    ) {
+      return null;
+    }
+
+    return {
+      clientVersionString: cachedClientVersionString,
+      productVersion,
+      buildId
+    };
+  } catch {
+    return null;
+  }
+}
+
 function appendDiscoveredStrings(target, values, source, sources) {
   for (const value of values) {
     const normalized = clientMetadata.normalizeClientVersionString(value);
@@ -559,7 +599,9 @@ async function prepareOfficialClientVersionDiscovery({
   serverKey = process.env.MS_SERVER || 'jp',
   base,
   fetchImpl = global.fetch,
-  logger = console
+  logger = console,
+  forceRefresh = false,
+  cachePath = RESOURCE_VERSION_CACHE_PATH
 } = {}) {
   const resolvedBase = resolveOfficialBase(serverKey, base);
   const versionUrl = new URL('version.json', resolvedBase);
@@ -572,6 +614,35 @@ async function prepareOfficialClientVersionDiscovery({
     })
   ]);
   const versionInfo = JSON.parse(versionText);
+  const normalizedServerKey = normalizeServerKey(serverKey);
+  const cached = !forceRefresh
+    ? readCurrentSuccessfulClientVersion({
+        serverKey: normalizedServerKey,
+        versionInfo,
+        indexHtml,
+        cachePath
+      })
+    : null;
+
+  if (cached) {
+    installOfficialClientVersionStrings([cached.clientVersionString]);
+    logger.log?.(
+      `official client metadata unchanged -> using successful cached string ${cached.clientVersionString}`
+    );
+    return {
+      strings: [cached.clientVersionString],
+      sources: { [cached.clientVersionString]: 'successful runtime cache' },
+      assetUrls: [],
+      assets: [],
+      errors: [],
+      productVersion: cached.productVersion,
+      buildId: cached.buildId,
+      base: resolvedBase,
+      versionInfo,
+      cacheHit: true
+    };
+  }
+
   const discovery = await discoverOfficialClientVersionStrings({
     base: resolvedBase,
     versionInfo,
@@ -593,7 +664,8 @@ async function prepareOfficialClientVersionDiscovery({
   return {
     ...discovery,
     base: resolvedBase,
-    versionInfo
+    versionInfo,
+    cacheHit: false
   };
 }
 
@@ -610,6 +682,7 @@ module.exports = {
   installOfficialClientVersionStrings,
   mergeDiscoveredClientVersionStrings,
   prepareOfficialClientVersionDiscovery,
+  readCurrentSuccessfulClientVersion,
   readResponseTextLimited,
   resolveObfuscatedStringTableEntry,
   resolveOfficialBase
