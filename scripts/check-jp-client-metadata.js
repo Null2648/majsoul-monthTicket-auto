@@ -3,7 +3,10 @@ const {
 } = require('../src/official-client-version');
 
 async function check() {
-  const discovery = await prepareOfficialClientVersionDiscovery({ serverKey: 'jp' });
+  const discovery = await prepareOfficialClientVersionDiscovery({
+    serverKey: 'jp',
+    forceRefresh: true
+  });
 
   if (!discovery.strings.length) {
     throw new Error(
