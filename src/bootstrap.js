@@ -5,10 +5,15 @@ const {
   finalizeProtocolSnapshot,
   prepareProtocolMonitor
 } = require('./protocol-monitor');
+const {
+  clearAutomationFailureReport,
+  writeAutomationFailureReport
+} = require('./automation-alert');
 
 async function bootstrap() {
   let structure;
   let protocolPrepared = false;
+  clearAutomationFailureReport();
 
   try {
     structure = await prepareOfficialStructureFallbacks();
@@ -54,6 +59,11 @@ async function bootstrap() {
 
 if (require.main === module) {
   bootstrap().catch(error => {
+    try {
+      writeAutomationFailureReport(error);
+    } catch (reportError) {
+      console.warn(`automation failure report could not be written: ${reportError?.message || reportError}`);
+    }
     console.error(error?.stack || error?.message || error);
     process.exitCode = 1;
   });
