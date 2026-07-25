@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const {
   discoverOfficialClientVersionStrings,
+  extractComputedClientVersionStrings,
   extractOfficialJavaScriptAssetUrls,
   mergeDiscoveredClientVersionStrings,
   readResponseTextLimited
@@ -39,7 +40,7 @@ test('official JavaScript assets include version code and Unity loader only once
   ]);
 });
 
-test('official Unity prefix is combined with the official product version', async () => {
+test('exact official strings are collected from index, code and loader assets', async () => {
   const bodies = new Map([
     ['https://game.example/v0.20.1/code.js', 'const clientPrefix="WebGL_2023-";'],
     ['https://game.example/Build/client.loader.js', 'const fallback="web-0.20.1";']
@@ -58,9 +59,25 @@ test('official Unity prefix is combined with the official product version', asyn
     'WebGL_2023-4.1.2',
     'web-0.20.1'
   ]);
-  assert.equal(
-    result.sources['WebGL_2023-4.1.2'],
-    '/v0.20.1/code.js#prefix+productVersion'
+  assert.equal(result.sources['WebGL_2023-4.1.2'], '/v0.20.1/code.js#prefix+productVersion');
+});
+
+test('obfuscated client builder resolves its string table prefix safely', () => {
+  const source = [
+    "$U=$y=$p=['unused'];",
+    "$J=$3=$6=['object',/x[y]z/g,'web-','tail'];",
+    "v[$6[1]][$x[4901]]=function(){return $J[2]+game[$U[315]][$x[56]][$6[76]]('.w','');};"
+  ].join('');
+
+  assert.deepEqual(
+    extractComputedClientVersionStrings(source, '0.11.252.w'),
+    [{
+      value: 'web-0.11.252',
+      tableName: '$J',
+      index: 2,
+      prefix: 'web-',
+      offset: source.indexOf('function()')
+    }]
   );
 });
 
