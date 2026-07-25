@@ -80,10 +80,15 @@ jobs:
 
       - name: Check current JP client metadata
         if: github.event_name == 'pull_request'
-        run: |
-          npm run check:jp
-          npm run check:yostar
-          npm run check:protocol -- --write-baseline
+        run: npm run check:jp
+
+      - name: Check current YoStar WebSDK metadata
+        if: github.event_name == 'pull_request'
+        run: npm run check:yostar
+
+      - name: Generate current protocol baseline
+        if: github.event_name == 'pull_request'
+        run: npm run check:protocol -- --write-baseline
 
       - name: Upload generated protocol baseline
         if: github.event_name == 'pull_request' && success()
