@@ -3,10 +3,15 @@ const fs = require('node:fs');
 const MAX_LINE_LENGTH = 320;
 const MAX_COMMITS = 50;
 const MAX_FILES = 100;
+const PR_MARKER = '<!-- majsoul-upstream-sync-pr -->';
+const ISSUE_MARKER = '<!-- majsoul-upstream-sync-incident -->';
 
 function sanitizeText(value) {
   return String(value ?? '')
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/<!--/g, '&lt;!--')
+    .replace(/-->/g, '--&gt;')
+    .replace(/@/g, '@\u200b')
     .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, '[REDACTED]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{12,}/gi, 'Bearer [REDACTED]')
     .replace(/\b(?:token|password|authorization|secret)\s*[:=]\s*[^\s,;]+/gi, match => {
@@ -29,32 +34,29 @@ function readLines(filePath, limit) {
 
 function normalizeOutcome(value) {
   const outcome = String(value || 'skipped').toLowerCase();
-  return ['success', 'failure', 'cancelled', 'skipped'].includes(outcome)
-    ? outcome
-    : 'unknown';
+  return ['success', 'failure', 'cancelled', 'skipped'].includes(outcome) ? outcome : 'unknown';
 }
 
 function outcomeLabel(value) {
-  const outcome = normalizeOutcome(value);
   return {
     success: '✅ 성공',
     failure: '❌ 실패',
     cancelled: '⏹️ 취소',
     skipped: '➖ 건너뜀',
     unknown: '❔ 확인 필요'
-  }[outcome];
+  }[normalizeOutcome(value)];
 }
 
 function buildValidationTable(validation = {}) {
   const rows = [
-    ['원본 병합', validation.merge],
+    ['원본 병합 및 무결성 확인', validation.merge],
     ['의존성 설치', validation.install],
+    ['의존성 보안 감사', validation.audit],
     ['단위 테스트', validation.unit],
     ['JP 클라이언트 검사', validation.jp],
     ['YoStar SDK 검사', validation.yostar],
     ['프로토콜 계약 검사', validation.protocol]
   ];
-
   return [
     '| 검증 항목 | 결과 |',
     '|---|---|',
@@ -84,8 +86,8 @@ function buildPrBody({
   const safeBase = sanitizeText(baseSha).slice(0, 12) || 'unknown';
   const safeSyncBranch = sanitizeText(syncBranch);
   const safeRunUrl = sanitizeText(runUrl);
-
   return [
+    PR_MARKER,
     '## 원본 업데이트 검토',
     '',
     `- 원본: \`${safeRepo}:${safeBranch}\``,
@@ -103,6 +105,7 @@ function buildPrBody({
     '## 자동 검증',
     buildValidationTable(validation),
     '',
+    '> 검증 작업은 읽기 전용 권한에서 수행되고, 게시 작업은 동일한 기준·원본 SHA로 병합 트리를 다시 구성해 무결성을 확인합니다.',
     '> 이 PR은 자동 병합되지 않습니다. 기존 맞춤 기능과 충돌 여부를 검토한 뒤 수동으로 병합해야 합니다.',
     '',
     '_이 본문은 원본 변경을 다시 감지할 때마다 자동으로 갱신됩니다._'
@@ -125,8 +128,8 @@ function buildIssueBody({
   const shortSha = sanitizeText(upstreamSha).slice(0, 12) || 'unknown';
   const safeRunUrl = sanitizeText(runUrl);
   const safePrUrl = sanitizeText(prUrl);
-
   const sections = [
+    ISSUE_MARKER,
     '## 업스트림 자동 동기화 점검 필요',
     '',
     `- 사유: \`${safeReason}\``,
@@ -134,21 +137,15 @@ function buildIssueBody({
     `- 원본 커밋: \`${shortSha}\``,
     `- Actions 실행: ${safeRunUrl || '확인 불가'}`
   ];
-
   if (safePrUrl) sections.push(`- 생성된 초안 PR: ${safePrUrl}`);
-
-  if (conflicts.length) {
-    sections.push('', '## 충돌 파일', markdownList(conflicts, '충돌 파일을 확인하지 못했습니다.'));
-  }
-
+  if (conflicts.length) sections.push('', '## 충돌 파일', markdownList(conflicts, '충돌 파일을 확인하지 못했습니다.'));
   sections.push(
     '',
     '## 자동 검증',
     buildValidationTable(validation),
     '',
-    '자동화는 원본 변경을 `main`에 직접 병합하지 않았습니다. 충돌 또는 실패 항목을 확인한 뒤 초안 PR이나 수동 브랜치에서 조정해야 합니다.'
+    '자동화는 원본 변경을 `main`에 직접 병합하지 않았습니다. 충돌·검증 실패·기준 SHA 변경·병합 트리 불일치 중 해당 사유를 확인해야 합니다.'
   );
-
   return sections.join('\n');
 }
 
@@ -168,6 +165,7 @@ function contextFromEnvironment(env = process.env) {
     validation: {
       merge: env.MERGE_OUTCOME,
       install: env.INSTALL_OUTCOME,
+      audit: env.AUDIT_OUTCOME,
       unit: env.UNIT_OUTCOME,
       jp: env.JP_OUTCOME,
       yostar: env.YOSTAR_OUTCOME,
@@ -179,29 +177,21 @@ function contextFromEnvironment(env = process.env) {
 function main() {
   const mode = process.argv[2];
   const context = contextFromEnvironment();
-
-  if (mode === 'pr') {
-    process.stdout.write(`${buildPrBody(context)}\n`);
-    return;
-  }
-  if (mode === 'issue') {
-    process.stdout.write(`${buildIssueBody(context)}\n`);
-    return;
-  }
-
+  if (mode === 'pr') return process.stdout.write(`${buildPrBody(context)}\n`);
+  if (mode === 'issue') return process.stdout.write(`${buildIssueBody(context)}\n`);
   throw new Error('Usage: node scripts/upstream-sync-report.js <pr|issue>');
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
+  try { main(); } catch (error) {
     console.error(error?.stack || error?.message || error);
     process.exitCode = 1;
   }
 }
 
 module.exports = {
+  ISSUE_MARKER,
+  PR_MARKER,
   buildIssueBody,
   buildPrBody,
   buildValidationTable,
