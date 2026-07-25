@@ -8,7 +8,7 @@ const DEFAULT_SERVER_BASES = {
   cn: 'https://game.maj-soul.com/1/'
 };
 const MAX_OFFICIAL_ASSETS = 8;
-const MAX_ASSET_BYTES = 4 * 1024 * 1024;
+const MAX_ASSET_BYTES = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15000;
 const PATCH_STATE = Symbol.for('majsoul.officialClientVersionDiscovery');
 
@@ -159,6 +159,15 @@ async function fetchOfficialText(url, {
   }
 }
 
+function extractOfficialClientVersionPrefixes(text) {
+  return [
+    ...new Set(
+      [...String(text || '').matchAll(/\b(WebGL_\d{4})-/g)]
+        .map(match => match[1])
+    )
+  ];
+}
+
 function appendDiscoveredStrings(target, values, source, sources) {
   for (const value of values) {
     const normalized = clientMetadata.normalizeClientVersionString(value);
@@ -182,29 +191,48 @@ async function discoverOfficialClientVersionStrings({
   const strings = [];
   const sources = {};
   const assetUrls = extractOfficialJavaScriptAssetUrls({ base, versionInfo, indexHtml });
+  let productVersion;
 
-  appendDiscoveredStrings(
-    strings,
-    clientMetadata.extractClientVersionStrings(indexHtml),
-    'index.html',
-    sources
-  );
+  try {
+    productVersion = clientMetadata.parseProductVersion(indexHtml);
+  } catch {
+    productVersion = null;
+  }
+
+  const appendTextHints = (text, source) => {
+    appendDiscoveredStrings(
+      strings,
+      clientMetadata.extractClientVersionStrings(text),
+      source,
+      sources
+    );
+
+    if (!productVersion) {
+      return;
+    }
+
+    for (const prefix of extractOfficialClientVersionPrefixes(text)) {
+      appendDiscoveredStrings(
+        strings,
+        [`${prefix}-${productVersion}`],
+        `${source}#prefix+productVersion`,
+        sources
+      );
+    }
+  };
+
+  appendTextHints(indexHtml, 'index.html');
 
   for (const assetUrl of assetUrls) {
     try {
       const text = await fetchOfficialText(assetUrl, { fetchImpl });
-      appendDiscoveredStrings(
-        strings,
-        clientMetadata.extractClientVersionStrings(text),
-        new URL(assetUrl).pathname,
-        sources
-      );
+      appendTextHints(text, new URL(assetUrl).pathname);
     } catch (error) {
       logger.warn?.(`official client asset skipped (${assetUrl}): ${error?.message || error}`);
     }
   }
 
-  return { strings, sources, assetUrls };
+  return { strings, sources, assetUrls, productVersion };
 }
 
 function mergeDiscoveredClientVersionStrings(options = {}, discoveredStrings = []) {
@@ -284,6 +312,7 @@ async function prepareOfficialClientVersionDiscovery({
 module.exports = {
   DEFAULT_SERVER_BASES,
   discoverOfficialClientVersionStrings,
+  extractOfficialClientVersionPrefixes,
   extractOfficialJavaScriptAssetUrls,
   fetchOfficialText,
   installOfficialClientVersionStrings,
