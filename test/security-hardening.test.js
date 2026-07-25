@@ -26,6 +26,7 @@ test('metadata responses are bounded even without a content-length header', asyn
   const response = new Response('0123456789ABCDEF');
   await assert.rejects(() => readBodyLimited(response, 8), /exceeds 8 bytes/);
   assert.equal(responseLimit(new URL('https://example.com/res/proto/liqi.json')), 24 * 1024 * 1024);
+  assert.equal(responseLimit(new URL('https://example.com/resversion0.1.0.w.json')), 32 * 1024 * 1024);
 });
 
 test('structure fallback bypasses unrelated origins', async () => {
@@ -87,9 +88,10 @@ test('issue and upstream text cannot trigger mentions or HTML comments', () => {
   assert.doesNotMatch(upstream, /<!--/);
 });
 
-test('pull-request validation is read-only and upstream publishing does not trust a candidate artifact', () => {
+test('pull-request validation is read-only and upstream publishing preserves trusted code', () => {
   const mainWorkflow = fs.readFileSync(repoPath('.github', 'workflows', 'main.yml'), 'utf8');
   const upstreamWorkflow = fs.readFileSync(repoPath('.github', 'workflows', 'upstream-sync.yml'), 'utf8');
+  const publishWorkflow = upstreamWorkflow.split(/\n  publish:\n/)[1] || '';
   assert.match(mainWorkflow, /validate:\n[\s\S]*?permissions:\n\s+contents: read/);
   assert.match(mainWorkflow, /attendance:\n[\s\S]*?contents: write/);
   assert.match(mainWorkflow, /persist-credentials: false/);
@@ -97,4 +99,7 @@ test('pull-request validation is read-only and upstream publishing does not trus
   assert.doesNotMatch(upstreamWorkflow, /download-artifact/);
   assert.match(upstreamWorkflow, /EXPECTED_TREE/);
   assert.match(upstreamWorkflow, /actual_tree/);
+  assert.match(publishWorkflow, /Preserve trusted report generator/);
+  assert.match(publishWorkflow, /trusted-upstream-sync-report\.js/);
+  assert.doesNotMatch(publishWorkflow, /node scripts\/upstream-sync-report\.js/);
 });
