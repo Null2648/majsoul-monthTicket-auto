@@ -12,6 +12,10 @@ on:
       - '.github/workflows/upstream-sync.yml'
       - 'scripts/upstream-sync-report.js'
       - 'test/upstream-sync-report.test.js'
+      - 'test/security-hardening.test.js'
+      - 'src/protocol-monitor-hardened.js'
+      - 'src/network-hardening.js'
+      - 'src/yostar-websdk-hardened.js'
 
 concurrency:
   group: upstream-sync-${{ github.repository }}
@@ -21,6 +25,9 @@ env:
   UPSTREAM_REPOSITORY: 4n3u/majsoul-monthTicket-auto
   UPSTREAM_BRANCH: main
   SYNC_BRANCH: automation/upstream-sync
+
+permissions:
+  contents: read
 
 jobs:
   validate:
@@ -33,9 +40,10 @@ jobs:
       upstream_sha: ${{ steps.discover.outputs.upstream_sha }}
       base_sha: ${{ steps.discover.outputs.base_sha }}
       merge_result: ${{ steps.merge.outputs.result }}
-      candidate_sha: ${{ steps.merge.outputs.candidate_sha }}
+      candidate_tree: ${{ steps.merge.outputs.candidate_tree }}
       validation_passed: ${{ steps.assess.outputs.passed }}
       install_outcome: ${{ steps.install.outcome }}
+      audit_outcome: ${{ steps.audit.outcome }}
       unit_outcome: ${{ steps.unit.outcome }}
       jp_outcome: ${{ steps.jp.outcome }}
       yostar_outcome: ${{ steps.yostar.outcome }}
@@ -43,34 +51,27 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Validate sync automation source
+      - name: Validate trusted sync automation source
         run: |
           npm ci
-          node --test test/upstream-sync-report.test.js
-
-      - name: Preserve trusted report generator
-        shell: bash
-        run: cp scripts/upstream-sync-report.js "${RUNNER_TEMP}/upstream-sync-report.js"
+          node --test test/upstream-sync-report.test.js test/security-hardening.test.js
 
       - name: Discover upstream changes
         id: discover
         shell: bash
         run: |
           set -euo pipefail
-          artifact_dir="${RUNNER_TEMP}/upstream-sync-result"
-          mkdir -p "${artifact_dir}"
-
           git remote remove upstream 2>/dev/null || true
           git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
           git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
@@ -82,13 +83,6 @@ jobs:
           echo "upstream_sha=${upstream_sha}" >> "${GITHUB_OUTPUT}"
           echo "base_sha=${base_sha}" >> "${GITHUB_OUTPUT}"
 
-          git log --format='- `%h` %s' --max-count=50 "origin/main..${upstream_ref}" \
-            > "${artifact_dir}/upstream-commits.md"
-          git diff --name-only "origin/main...${upstream_ref}" \
-            | head -100 \
-            | awk '{ print "- `" $0 "`" }' \
-            > "${artifact_dir}/upstream-files.md"
-
           if git merge-base --is-ancestor "${upstream_ref}" origin/main; then
             echo 'has_updates=false' >> "${GITHUB_OUTPUT}"
             echo 'No upstream commits are missing from the fork.'
@@ -97,51 +91,42 @@ jobs:
             echo "Upstream changes detected at ${upstream_sha}."
           fi
 
-      - name: Merge upstream into review candidate
+      - name: Merge upstream into read-only review candidate
         id: merge
         if: steps.discover.outputs.has_updates == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          artifact_dir="${RUNNER_TEMP}/upstream-sync-result"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -B "${SYNC_BRANCH}" origin/main
+          git checkout -B "${SYNC_BRANCH}" "${{ steps.discover.outputs.base_sha }}"
 
           set +e
-          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}" \
-            > "${artifact_dir}/merge.log" 2>&1
+          git merge --no-ff --no-edit "${{ steps.discover.outputs.upstream_sha }}"
           merge_code=$?
           set -e
 
           if [[ ${merge_code} -ne 0 ]]; then
-            git diff --name-only --diff-filter=U \
-              | head -100 \
-              | awk '{ print "- `" $0 "`" }' \
-              > "${artifact_dir}/conflict-files.md"
             git merge --abort || true
             echo 'result=conflict' >> "${GITHUB_OUTPUT}"
-            echo 'candidate_sha=' >> "${GITHUB_OUTPUT}"
+            echo 'candidate_tree=' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          candidate_sha="$(git rev-parse HEAD)"
           echo 'result=success' >> "${GITHUB_OUTPUT}"
-          echo "candidate_sha=${candidate_sha}" >> "${GITHUB_OUTPUT}"
-
-      - name: Create immutable candidate Git bundle
-        if: steps.merge.outputs.result == 'success'
-        shell: bash
-        run: |
-          git bundle create \
-            "${RUNNER_TEMP}/upstream-sync-result/candidate.bundle" \
-            "refs/heads/${SYNC_BRANCH}"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')" >> "${GITHUB_OUTPUT}"
 
       - name: Install candidate dependencies
         id: install
         if: steps.merge.outputs.result == 'success'
         continue-on-error: true
         run: npm ci
+
+      - name: Audit candidate production dependencies
+        id: audit
+        if: steps.merge.outputs.result == 'success' && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Run candidate unit tests
         id: unit
@@ -178,6 +163,7 @@ jobs:
         if: always() && steps.merge.outputs.result == 'success'
         env:
           INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
           UNIT_OUTCOME: ${{ steps.unit.outcome }}
           JP_OUTCOME: ${{ steps.jp.outcome }}
           YOSTAR_OUTCOME: ${{ steps.yostar.outcome }}
@@ -187,6 +173,7 @@ jobs:
           passed=true
           for outcome in \
             "${INSTALL_OUTCOME}" \
+            "${AUDIT_OUTCOME}" \
             "${UNIT_OUTCOME}" \
             "${JP_OUTCOME}" \
             "${YOSTAR_OUTCOME}" \
@@ -197,15 +184,6 @@ jobs:
           done
           echo "passed=${passed}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload upstream validation result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: upstream-sync-result
-          path: ${{ runner.temp }}/upstream-sync-result
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail pull-request validation on conflict or test failure
         if: >-
           github.event_name == 'pull_request' &&
@@ -215,12 +193,9 @@ jobs:
 
   publish:
     needs: validate
-    if: >-
-      always() &&
-      github.event_name != 'pull_request' &&
-      needs.validate.result == 'success'
+    if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     permissions:
       contents: write
       pull-requests: write
@@ -229,52 +204,115 @@ jobs:
 
     steps:
       - name: Checkout trusted main branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Download upstream validation result
-        uses: actions/download-artifact@v5
-        with:
-          name: upstream-sync-result
-          path: ${{ runner.temp }}/upstream-sync-result
-
-      - name: Publish candidate branch
-        id: push
-        if: >-
-          needs.validate.has_updates == 'true' &&
-          needs.validate.merge_result == 'success'
+      - name: Reconstruct and verify reviewed candidate
+        id: reconstruct
+        if: needs.validate.result == 'success' && needs.validate.has_updates == 'true'
+        env:
+          BASE_SHA: ${{ needs.validate.base_sha }}
+          UPSTREAM_SHA: ${{ needs.validate.upstream_sha }}
+          EXPECTED_MERGE_RESULT: ${{ needs.validate.merge_result }}
+          EXPECTED_TREE: ${{ needs.validate.candidate_tree }}
         shell: bash
         run: |
           set -euo pipefail
-          bundle="${RUNNER_TEMP}/upstream-sync-result/candidate.bundle"
-          git fetch "${bundle}" \
-            "refs/heads/${SYNC_BRANCH}:refs/heads/${SYNC_BRANCH}"
-          git fetch --no-tags origin \
-            "${SYNC_BRANCH}:refs/remotes/origin/${SYNC_BRANCH}" 2>/dev/null || true
-          git push --force-with-lease origin \
-            "refs/heads/${SYNC_BRANCH}:refs/heads/${SYNC_BRANCH}"
+          report_dir="${RUNNER_TEMP}/upstream-sync-result"
+          mkdir -p "${report_dir}"
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags origin main
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+
+          current_base="$(git rev-parse origin/main)"
+          current_upstream="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          git log --format='- `%h` %s' --max-count=50 "${BASE_SHA}..${UPSTREAM_SHA}" > "${report_dir}/upstream-commits.md" || true
+          git diff --name-only "${BASE_SHA}...${UPSTREAM_SHA}" | head -100 | awk '{ print "- `" $0 "`" }' > "${report_dir}/upstream-files.md" || true
+
+          if [[ "${current_base}" != "${BASE_SHA}" ]]; then
+            echo 'result=stale-base' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${current_upstream}" != "${UPSTREAM_SHA}" ]]; then
+            echo 'result=stale-upstream' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "${SYNC_BRANCH}" "${BASE_SHA}"
+          set +e
+          git merge --no-ff --no-edit "${UPSTREAM_SHA}"
+          merge_code=$?
+          set -e
+
+          if [[ ${merge_code} -ne 0 ]]; then
+            git diff --name-only --diff-filter=U | head -100 | awk '{ print "- `" $0 "`" }' > "${report_dir}/conflict-files.md"
+            git merge --abort || true
+            if [[ "${EXPECTED_MERGE_RESULT}" == 'conflict' ]]; then
+              echo 'result=conflict' >> "${GITHUB_OUTPUT}"
+            else
+              echo 'result=integrity-mismatch' >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          fi
+
+          actual_tree="$(git rev-parse 'HEAD^{tree}')"
+          if [[ "${EXPECTED_MERGE_RESULT}" != 'success' || "${actual_tree}" != "${EXPECTED_TREE}" ]]; then
+            echo 'result=integrity-mismatch' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo 'result=success' >> "${GITHUB_OUTPUT}"
+          echo "candidate_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "candidate_tree=${actual_tree}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish verified candidate branch
+        id: push
+        if: steps.reconstruct.outputs.result == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${auth}"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          trap 'git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true' EXIT
+          git fetch --no-tags origin "${SYNC_BRANCH}:refs/remotes/origin/${SYNC_BRANCH}" 2>/dev/null || true
+          git push --force-with-lease origin "refs/heads/${SYNC_BRANCH}:refs/heads/${SYNC_BRANCH}"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Assess published validation status
         id: status
-        if: needs.validate.has_updates == 'true'
         env:
-          MERGE_RESULT: ${{ needs.validate.merge_result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          HAS_UPDATES: ${{ needs.validate.has_updates }}
+          RECONSTRUCT_RESULT: ${{ steps.reconstruct.outputs.result }}
           VALIDATION_PASSED: ${{ needs.validate.validation_passed }}
         shell: bash
         run: |
-          if [[ "${MERGE_RESULT}" == 'success' && "${VALIDATION_PASSED}" == 'true' ]]; then
+          if [[ "${VALIDATE_RESULT}" != 'success' ]]; then
+            echo 'state=failure' >> "${GITHUB_OUTPUT}"
+            echo 'reason=validator-failed' >> "${GITHUB_OUTPUT}"
+          elif [[ "${HAS_UPDATES}" != 'true' ]]; then
+            echo 'state=success' >> "${GITHUB_OUTPUT}"
+            echo 'reason=no-updates' >> "${GITHUB_OUTPUT}"
+          elif [[ "${RECONSTRUCT_RESULT}" != 'success' ]]; then
+            echo 'state=failure' >> "${GITHUB_OUTPUT}"
+            echo "reason=${RECONSTRUCT_RESULT:-reconstruction-failed}" >> "${GITHUB_OUTPUT}"
+          elif [[ "${VALIDATION_PASSED}" == 'true' ]]; then
             echo 'state=success' >> "${GITHUB_OUTPUT}"
             echo 'reason=validated' >> "${GITHUB_OUTPUT}"
-          elif [[ "${MERGE_RESULT}" == 'conflict' ]]; then
-            echo 'state=failure' >> "${GITHUB_OUTPUT}"
-            echo 'reason=merge-conflict' >> "${GITHUB_OUTPUT}"
           else
             echo 'state=failure' >> "${GITHUB_OUTPUT}"
             echo 'reason=validation-failed' >> "${GITHUB_OUTPUT}"
@@ -282,9 +320,7 @@ jobs:
 
       - name: Create or update draft review PR
         id: pr
-        if: >-
-          needs.validate.has_updates == 'true' &&
-          needs.validate.merge_result == 'success'
+        if: steps.reconstruct.outputs.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ needs.validate.upstream_sha }}
@@ -294,6 +330,7 @@ jobs:
           UPSTREAM_FILES_FILE: ${{ runner.temp }}/upstream-sync-result/upstream-files.md
           MERGE_OUTCOME: success
           INSTALL_OUTCOME: ${{ needs.validate.install_outcome }}
+          AUDIT_OUTCOME: ${{ needs.validate.audit_outcome }}
           UNIT_OUTCOME: ${{ needs.validate.unit_outcome }}
           JP_OUTCOME: ${{ needs.validate.jp_outcome }}
           YOSTAR_OUTCOME: ${{ needs.validate.yostar_outcome }}
@@ -305,34 +342,34 @@ jobs:
           node scripts/upstream-sync-report.js pr > "${body_file}"
           short_sha="${UPSTREAM_SHA:0:12}"
           title="[업스트림] 원본 업데이트 검토 (${short_sha})"
-          pr_number="$(gh pr list \
-            --state open \
-            --head "${SYNC_BRANCH}" \
-            --base main \
-            --json number \
-            --jq '.[0].number // empty')"
-
+          pr_number="$(gh pr list --state open --head "${SYNC_BRANCH}" --base main --json number --jq '.[0].number // empty')"
           if [[ -n "${pr_number}" ]]; then
             gh pr edit "${pr_number}" --title "${title}" --body-file "${body_file}"
             pr_url="$(gh pr view "${pr_number}" --json url --jq .url)"
           else
-            pr_url="$(gh pr create \
-              --draft \
-              --head "${SYNC_BRANCH}" \
-              --base main \
-              --title "${title}" \
-              --body-file "${body_file}")"
+            pr_url="$(gh pr create --draft --head "${SYNC_BRANCH}" --base main --title "${title}" --body-file "${body_file}")"
           fi
-
           echo "url=${pr_url}" >> "${GITHUB_OUTPUT}"
 
-      - name: Publish candidate validation status
-        if: >-
-          needs.validate.has_updates == 'true' &&
-          needs.validate.merge_result == 'success'
+      - name: Close obsolete draft review PR
+        if: needs.validate.has_updates != 'true' || steps.reconstruct.outputs.result != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_SHA: ${{ needs.validate.candidate_sha }}
+          REASON: ${{ steps.status.outputs.reason }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list --state open --head "${SYNC_BRANCH}" --base main --json number --jq '.[0].number // empty')"
+          if [[ -n "${pr_number}" ]]; then
+            gh pr comment "${pr_number}" --body "자동 동기화 후보가 더 이상 유효하지 않아 초안 PR을 닫습니다. 사유: ${REASON}."
+            gh pr close "${pr_number}"
+          fi
+
+      - name: Publish candidate validation status
+        if: steps.reconstruct.outputs.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.reconstruct.outputs.candidate_sha }}
           STATUS_STATE: ${{ steps.status.outputs.state }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
@@ -341,18 +378,14 @@ jobs:
           if [[ "${STATUS_STATE}" != 'success' ]]; then
             description='Upstream candidate requires manual fixes'
           fi
-          gh api \
-            --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
             -f state="${STATUS_STATE}" \
             -f context='upstream-sync/validation' \
             -f description="${description}" \
             -f target_url="${RUN_URL}"
 
       - name: Create or update upstream sync incident
-        if: >-
-          needs.validate.has_updates == 'true' &&
-          steps.status.outputs.state == 'failure'
+        if: steps.status.outputs.state == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ needs.validate.upstream_sha }}
@@ -362,8 +395,9 @@ jobs:
           UPSTREAM_COMMITS_FILE: ${{ runner.temp }}/upstream-sync-result/upstream-commits.md
           UPSTREAM_FILES_FILE: ${{ runner.temp }}/upstream-sync-result/upstream-files.md
           CONFLICT_FILES_FILE: ${{ runner.temp }}/upstream-sync-result/conflict-files.md
-          MERGE_OUTCOME: ${{ needs.validate.merge_result == 'success' && 'success' || 'failure' }}
+          MERGE_OUTCOME: ${{ steps.reconstruct.outputs.result == 'success' && 'success' || 'failure' }}
           INSTALL_OUTCOME: ${{ needs.validate.install_outcome }}
+          AUDIT_OUTCOME: ${{ needs.validate.audit_outcome }}
           UNIT_OUTCOME: ${{ needs.validate.unit_outcome }}
           JP_OUTCOME: ${{ needs.validate.jp_outcome }}
           YOSTAR_OUTCOME: ${{ needs.validate.yostar_outcome }}
@@ -374,12 +408,7 @@ jobs:
           title='[업스트림 동기화] 수동 확인 필요'
           body_file="${RUNNER_TEMP}/upstream-issue-body.md"
           node scripts/upstream-sync-report.js issue > "${body_file}"
-          issue_number="$(gh issue list \
-            --state open \
-            --search "\"${title}\" in:title" \
-            --json number \
-            --jq '.[0].number // empty')"
-
+          issue_number="$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')"
           if [[ -n "${issue_number}" ]]; then
             gh issue comment "${issue_number}" --body-file "${body_file}"
           else
@@ -387,9 +416,7 @@ jobs:
           fi
 
       - name: Close resolved upstream sync incident
-        if: >-
-          needs.validate.has_updates != 'true' ||
-          steps.status.outputs.state == 'success'
+        if: steps.status.outputs.state == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -398,29 +425,18 @@ jobs:
         run: |
           set -euo pipefail
           title='[업스트림 동기화] 수동 확인 필요'
-          issue_number="$(gh issue list \
-            --state open \
-            --search "\"${title}\" in:title" \
-            --json number \
-            --jq '.[0].number // empty')"
-          if [[ -z "${issue_number}" ]]; then
-            exit 0
-          fi
-
+          issue_number="$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')"
+          if [[ -z "${issue_number}" ]]; then exit 0; fi
           recovery_file="${RUNNER_TEMP}/upstream-recovery.md"
           {
             echo '업스트림 동기화 검사가 다시 정상 상태가 되었습니다.'
             echo
             echo "- Actions: ${RUN_URL}"
-            if [[ -n "${PR_URL}" ]]; then
-              echo "- 초안 PR: ${PR_URL}"
-            fi
+            if [[ -n "${PR_URL}" ]]; then echo "- 초안 PR: ${PR_URL}"; fi
           } > "${recovery_file}"
           gh issue comment "${issue_number}" --body-file "${recovery_file}"
           gh issue close "${issue_number}" --reason completed
 
       - name: Fail workflow when manual intervention is required
-        if: >-
-          needs.validate.has_updates == 'true' &&
-          steps.status.outputs.state == 'failure'
+        if: steps.status.outputs.state == 'failure'
         run: exit 1
