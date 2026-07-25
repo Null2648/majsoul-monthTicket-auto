@@ -6,6 +6,13 @@ const {
   createHash,
   randomBytes
 } = require('node:crypto');
+const {
+  mergeWebSdkMetadataCandidates,
+  parseJpSdkConfig,
+  parseJpSdkConfigCandidates,
+  parseWebSdkRuntime,
+  parseWebSdkRuntimeCandidates
+} = require('./yostar-websdk-parser');
 
 const AUTH_CACHE_PATH = path.join(process.cwd(), 'auth-cache.json');
 const WEBSDK_CONFIG_PATH = 'StreamingAssets/WebGL/YoStarSDK/config.json';
@@ -13,36 +20,6 @@ const WEBSDK_SCRIPT_PATH = 'StreamingAssets/WebGL/YoStarSDK/index.js.txt';
 
 function buildUrl(base, pathname) {
   return `${String(base).replace(/\/+$/, '')}/${String(pathname).replace(/^\/+/, '')}`;
-}
-
-function parseWebSdkRuntime(script) {
-  const source = String(script || '');
-  const version = source.match(/\bversion:"([^"]+)"/)?.[1];
-  const signingSecret = source.match(
-    /\bGK=\([^)]*\)=>\{const [A-Za-z_$][\w$]*="([a-f0-9]{40})"/
-  )?.[1];
-
-  if (!version || !signingSecret) {
-    throw new Error('Unable to read the current YoStar WebSDK version/signing metadata');
-  }
-
-  return { version, signingSecret };
-}
-
-function parseJpSdkConfig(config) {
-  const jp = config?.Regions?.Jp;
-  const primaryHost = jp?.Sdk_Url;
-  const backupHost = jp?.Sdk_Url_Lb;
-  const pid = jp?.Sdk_Pid;
-
-  if (!primaryHost || !pid) {
-    throw new Error('JP YoStar WebSDK host or PID is missing');
-  }
-
-  return {
-    hosts: [...new Set([primaryHost, backupHost].filter(Boolean))],
-    pid
-  };
 }
 
 function createStableDeviceId(uid, baseToken) {
@@ -184,16 +161,44 @@ async function fetchText(url) {
   return response.text();
 }
 
-async function loadOfficialWebSdkMetadata(gameBase) {
+async function loadOfficialWebSdkMetadataCandidates(gameBase) {
   const [configText, script] = await Promise.all([
     fetchText(buildUrl(gameBase, WEBSDK_CONFIG_PATH)),
     fetchText(buildUrl(gameBase, WEBSDK_SCRIPT_PATH))
   ]);
+  let config;
 
-  return {
-    ...parseJpSdkConfig(JSON.parse(configText)),
-    ...parseWebSdkRuntime(script)
-  };
+  try {
+    config = JSON.parse(configText);
+  } catch {
+    throw new Error('YoStar WebSDK config is not valid JSON');
+  }
+
+  const configCandidates = parseJpSdkConfigCandidates(config);
+  const runtimeCandidates = parseWebSdkRuntimeCandidates(script);
+  const candidates = mergeWebSdkMetadataCandidates({
+    configCandidates,
+    runtimeCandidates
+  });
+
+  if (!candidates.length) {
+    throw new Error(
+      `Unable to build YoStar WebSDK metadata candidates ` +
+      `(config=${configCandidates.length}, runtime=${runtimeCandidates.length})`
+    );
+  }
+
+  console.log(
+    `YoStar WebSDK metadata candidates -> ${candidates
+      .map(candidate => `${candidate.version}:${candidate.strategy}`)
+      .join(', ')}`
+  );
+
+  return candidates;
+}
+
+async function loadOfficialWebSdkMetadata(gameBase) {
+  return (await loadOfficialWebSdkMetadataCandidates(gameBase))[0];
 }
 
 function extractQuickLoginResult(response) {
@@ -225,84 +230,105 @@ async function refreshYostarCredentials({
   deviceId,
   metadata
 }) {
-  const sdk = metadata || await loadOfficialWebSdkMetadata(gameBase);
+  const sdkCandidates = metadata
+    ? mergeWebSdkMetadataCandidates({ cachedMetadata: metadata })
+    : await loadOfficialWebSdkMetadataCandidates(gameBase);
+
+  if (!sdkCandidates.length) {
+    throw new Error('No usable YoStar WebSDK metadata candidate is available');
+  }
+
   const resolvedDeviceId = deviceId || createStableDeviceId(uid, token);
   const errors = [];
   let lastYostarCode;
 
-  for (const host of sdk.hosts) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const authorization = buildAuthorization({
-        uid,
-        token,
-        deviceId: resolvedDeviceId,
-        pid: sdk.pid,
-        sdkVersion: sdk.version,
-        signingSecret: sdk.signingSecret,
-        unixTime: Math.floor(Date.now() / 1000)
-      });
+  for (const sdk of sdkCandidates) {
+    console.log(
+      `trying YoStar WebSDK metadata -> version=${sdk.version} ` +
+      `strategy=${sdk.strategy} routes=${sdk.hosts.length}`
+    );
 
-      try {
-        const response = await fetch(buildUrl(host, 'user/quick-login'), {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            Authorization: JSON.stringify(authorization),
-            'Content-Type': 'application/json',
-            Origin: 'https://game.mahjongsoul.com',
-            Referer: 'https://game.mahjongsoul.com/',
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-              '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
-          },
-          body: '{}',
-          signal: AbortSignal.timeout(10000)
+    for (const host of sdk.hosts) {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const authorization = buildAuthorization({
+          uid,
+          token,
+          deviceId: resolvedDeviceId,
+          pid: sdk.pid,
+          sdkVersion: sdk.version,
+          signingSecret: sdk.signingSecret,
+          unixTime: Math.floor(Date.now() / 1000)
         });
-        const text = await response.text();
-        let json;
 
         try {
-          json = JSON.parse(text);
-        } catch {
-          throw new Error(`YoStar WebSDK returned non-JSON HTTP ${response.status}`);
-        }
+          const response = await fetch(buildUrl(host, 'user/quick-login'), {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              Authorization: JSON.stringify(authorization),
+              'Content-Type': 'application/json',
+              Origin: 'https://game.mahjongsoul.com',
+              Referer: 'https://game.mahjongsoul.com/',
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+            },
+            body: '{}',
+            signal: AbortSignal.timeout(10000)
+          });
+          const text = await response.text();
+          let json;
 
-        const quickLoginResult = extractQuickLoginResult(json);
+          try {
+            json = JSON.parse(text);
+          } catch {
+            throw new Error(`YoStar WebSDK returned non-JSON HTTP ${response.status}`);
+          }
 
-        if (quickLoginResult.uid !== String(uid)) {
-          throw new Error(
-            'YoStar WebSDK quick login returned a different account UID'
+          const quickLoginResult = extractQuickLoginResult(json);
+
+          if (quickLoginResult.uid !== String(uid)) {
+            throw new Error(
+              'YoStar WebSDK quick login returned a different account UID'
+            );
+          }
+
+          return {
+            // The official WebSDK keeps the account credentials it used for
+            // quick-login. UserInfo.Token belongs to the quick-login cache and is
+            // not the LOGIN_TOKEN returned to the game client.
+            uid: String(uid),
+            token: String(token),
+            responseUid: quickLoginResult.uid,
+            responseToken: quickLoginResult.token,
+            deviceId: resolvedDeviceId,
+            metadata: sdk
+          };
+        } catch (error) {
+          if (error?.yostarCode) {
+            lastYostarCode = error.yostarCode;
+          }
+
+          if (error?.yostarCode === 100403) {
+            error.metadataStrategy = sdk.strategy;
+            throw error;
+          }
+
+          errors.push(
+            `${sdk.strategy} ${new URL(host).host} attempt ${attempt}: ` +
+            `${error?.message || error}`
           );
-        }
 
-        return {
-          // The official WebSDK keeps the account credentials it used for
-          // quick-login. UserInfo.Token belongs to the quick-login cache and is
-          // not the LOGIN_TOKEN returned to the game client.
-          uid: String(uid),
-          token: String(token),
-          responseUid: quickLoginResult.uid,
-          responseToken: quickLoginResult.token,
-          deviceId: resolvedDeviceId,
-          metadata: sdk
-        };
-      } catch (error) {
-        if (error?.yostarCode) {
-          lastYostarCode = error.yostarCode;
-        }
-        errors.push(
-          `${new URL(host).host} attempt ${attempt}: ${error?.message || error}`
-        );
-
-        if (error?.yostarCode || attempt === 3) {
-          break;
+          if (error?.yostarCode || attempt === 3) {
+            break;
+          }
         }
       }
     }
   }
 
   const error = new Error(
-    `All YoStar WebSDK quick-login routes failed: ${errors.join('; ')}`
+    `All YoStar WebSDK metadata and quick-login routes failed: ${errors.join('; ')}`
   );
   error.yostarCode = lastYostarCode;
   throw error;
@@ -316,8 +342,11 @@ module.exports = {
   encryptTokenCache,
   extractQuickLoginResult,
   loadOfficialWebSdkMetadata,
+  loadOfficialWebSdkMetadataCandidates,
   parseJpSdkConfig,
+  parseJpSdkConfigCandidates,
   parseWebSdkRuntime,
+  parseWebSdkRuntimeCandidates,
   readTokenCache,
   refreshYostarCredentials,
   saveTokenCache
