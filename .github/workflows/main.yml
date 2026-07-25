@@ -85,6 +85,14 @@ jobs:
       - name: Check current JP client metadata
         run: npm run check:jp
 
+      - name: Upload JP metadata diagnostic
+        if: failure() && hashFiles('jp-metadata-diagnostic.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jp-metadata-diagnostic-${{ github.run_id }}
+          path: jp-metadata-diagnostic.json
+          retention-days: 7
+
       - name: Check current YoStar WebSDK metadata
         run: npm run check:yostar
 
