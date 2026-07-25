@@ -190,6 +190,8 @@ async function discoverOfficialClientVersionStrings({
 }) {
   const strings = [];
   const sources = {};
+  const assets = [];
+  const errors = [];
   const assetUrls = extractOfficialJavaScriptAssetUrls({ base, versionInfo, indexHtml });
   let productVersion;
 
@@ -222,17 +224,35 @@ async function discoverOfficialClientVersionStrings({
   };
 
   appendTextHints(indexHtml, 'index.html');
+  assets.push({
+    source: 'index.html',
+    bytes: Buffer.byteLength(indexHtml, 'utf8'),
+    strings: clientMetadata.extractClientVersionStrings(indexHtml),
+    prefixes: extractOfficialClientVersionPrefixes(indexHtml)
+  });
 
   for (const assetUrl of assetUrls) {
     try {
       const text = await fetchOfficialText(assetUrl, { fetchImpl });
-      appendTextHints(text, new URL(assetUrl).pathname);
+      const source = new URL(assetUrl).pathname;
+      const exactStrings = clientMetadata.extractClientVersionStrings(text);
+      const prefixes = extractOfficialClientVersionPrefixes(text);
+      assets.push({
+        url: assetUrl,
+        source,
+        bytes: Buffer.byteLength(text, 'utf8'),
+        strings: exactStrings,
+        prefixes
+      });
+      appendTextHints(text, source);
     } catch (error) {
-      logger.warn?.(`official client asset skipped (${assetUrl}): ${error?.message || error}`);
+      const message = error?.message || String(error);
+      errors.push({ url: assetUrl, message });
+      logger.warn?.(`official client asset skipped (${assetUrl}): ${message}`);
     }
   }
 
-  return { strings, sources, assetUrls, productVersion };
+  return { strings, sources, assetUrls, productVersion, assets, errors };
 }
 
 function mergeDiscoveredClientVersionStrings(options = {}, discoveredStrings = []) {
