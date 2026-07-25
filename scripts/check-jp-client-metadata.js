@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const {
   installGlobalMetadataFetchGuard,
   scopeStructureFetch
@@ -5,6 +6,8 @@ const {
 const {
   prepareOfficialStructureFallbacks
 } = require('../src/official-structure-fallbacks');
+
+const DIAGNOSTIC_PATH = 'jp-metadata-diagnostic.json';
 
 async function check() {
   installGlobalMetadataFetchGuard();
@@ -53,6 +56,7 @@ async function check() {
     );
   }
 
+  if (fs.existsSync(DIAGNOSTIC_PATH)) fs.unlinkSync(DIAGNOSTIC_PATH);
   console.log(
     `JP client metadata is current: product=${context.productVersion}, ` +
     `build=${context.buildId}, resource=${context.version}, ` +
@@ -63,6 +67,12 @@ async function check() {
 }
 
 check().catch(error => {
-  console.error(error?.stack || error.message);
+  const message = String(error?.stack || error?.message || error)
+    .replace(/(authorization|token|password|secret)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .slice(0, 12000);
+  try {
+    fs.writeFileSync(DIAGNOSTIC_PATH, `${JSON.stringify({ message }, null, 2)}\n`, 'utf8');
+  } catch { /* diagnostic write is best-effort */ }
+  console.error(message);
   process.exitCode = 1;
 });
