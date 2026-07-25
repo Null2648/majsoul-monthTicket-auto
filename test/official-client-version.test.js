@@ -1,11 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   discoverOfficialClientVersionStrings,
   extractComputedClientVersionStrings,
   extractOfficialJavaScriptAssetUrls,
   mergeDiscoveredClientVersionStrings,
+  readCurrentSuccessfulClientVersion,
   readResponseTextLimited
 } = require('../src/official-client-version');
 
@@ -79,6 +83,35 @@ test('obfuscated client builder resolves its string table prefix safely', () => 
       offset: source.indexOf('function()')
     }]
   );
+});
+
+test('unchanged official metadata reuses the last successful client string', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'majsoul-client-cache-'));
+  const cachePath = path.join(directory, 'resource-version.json');
+  fs.writeFileSync(cachePath, JSON.stringify({
+    clientVersionStrings: { jp: 'web-0.11.252' },
+    sourceVersions: { jp: '0.11.252.w' },
+    productVersions: { jp: '4.0.11' },
+    buildIds: { jp: 'jp-WebGL-release-4.0.11(12)' }
+  }));
+
+  try {
+    assert.deepEqual(
+      readCurrentSuccessfulClientVersion({
+        serverKey: 'jp',
+        versionInfo: { version: '0.11.252.w' },
+        indexHtml: '<script src="Build/jp-WebGL-release-4.0.11(12).loader.js"></script><script>const config={productVersion:"4.0.11"};</script>',
+        cachePath
+      }),
+      {
+        clientVersionString: 'web-0.11.252',
+        productVersion: '4.0.11',
+        buildId: 'jp-WebGL-release-4.0.11(12)'
+      }
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('discovered exact strings are inserted ahead of generated detected candidates', () => {
