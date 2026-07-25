@@ -1,12 +1,18 @@
 const {
+  installGlobalMetadataFetchGuard,
+  scopeStructureFetch
+} = require('../src/network-hardening');
+const {
   prepareOfficialStructureFallbacks
 } = require('../src/official-structure-fallbacks');
 
 async function check() {
+  installGlobalMetadataFetchGuard();
   const structure = await prepareOfficialStructureFallbacks({
     serverKey: 'jp',
     forceRefresh: true
   });
+  scopeStructureFetch(structure);
   const {
     prepareOfficialClientVersionDiscovery
   } = require('../src/official-client-version');
@@ -36,13 +42,11 @@ async function check() {
       `Official JP client strings were not installed as candidates: ${missing.join(', ')}`
     );
   }
-
   if (context.productVersion !== structure.productVersion) {
     throw new Error(
       `Official productVersion mismatch: structure=${structure.productVersion}, context=${context.productVersion}`
     );
   }
-
   if (context.buildId !== structure.buildId) {
     throw new Error(
       `Official Unity build mismatch: structure=${structure.buildId}, context=${context.buildId}`
