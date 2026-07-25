@@ -1,9 +1,15 @@
+const fs = require('node:fs');
 const {
   prepareOfficialClientVersionDiscovery
 } = require('../src/official-client-version');
 
 async function check() {
   const discovery = await prepareOfficialClientVersionDiscovery({ serverKey: 'jp' });
+  fs.writeFileSync(
+    'client-version-diagnostics.json',
+    `${JSON.stringify(discovery, null, 2)}\n`,
+    'utf8'
+  );
 
   if (!discovery.strings.length) {
     throw new Error(
