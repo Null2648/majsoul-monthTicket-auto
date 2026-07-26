@@ -5,10 +5,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
-  FALLBACK_SCHEDULE,
   PRIMARY_SCHEDULE,
   buildFailureBody,
   classifyAutomationError,
+  describeSchedule,
   readJsonFile,
   sanitizeText,
   shouldNotifyFailure,
@@ -36,11 +36,12 @@ test('configuration and structural failures are classified for immediate notific
   );
 });
 
-test('morning transient failures wait, while configuration and structural failures notify immediately', () => {
+test('safe-window transient failures defer to the non-login watchdog', () => {
   assert.equal(
     shouldNotifyFailure({
       eventName: 'schedule',
       schedule: PRIMARY_SCHEDULE,
+      stage: 'safe-morning-window',
       classification: 'network-or-gateway'
     }),
     false
@@ -50,19 +51,12 @@ test('morning transient failures wait, while configuration and structural failur
       shouldNotifyFailure({
         eventName: 'schedule',
         schedule: PRIMARY_SCHEDULE,
+        stage: 'safe-morning-window',
         classification
       }),
       true
     );
   }
-  assert.equal(
-    shouldNotifyFailure({
-      eventName: 'schedule',
-      schedule: FALLBACK_SCHEDULE,
-      classification: 'network-or-gateway'
-    }),
-    true
-  );
   assert.equal(
     shouldNotifyFailure({
       eventName: 'workflow_dispatch',
@@ -71,6 +65,8 @@ test('morning transient failures wait, while configuration and structural failur
     }),
     true
   );
+  assert.match(describeSchedule(PRIMARY_SCHEDULE, 'safe-morning-window'), /06:07·06:17/);
+  assert.match(describeSchedule('', 'safety-watchdog'), /로그인 없음/);
 });
 
 test('failure reports redact legacy and namespaced credentials', () => {
@@ -99,13 +95,13 @@ test('failure reports redact legacy and namespaced credentials', () => {
   assert.match(serialized, /REDACTED/);
 });
 
-test('issue body contains actionable preflight and final recovery status', () => {
+test('issue body explains that late automatic login is intentionally blocked', () => {
   const body = buildFailureBody({
     classification: 'configuration',
     summary: sanitizeText('UID and TOKEN must either both be configured or both be omitted.'),
     eventName: 'schedule',
-    schedule: FALLBACK_SCHEDULE,
-    stage: 'final-recovery',
+    schedule: PRIMARY_SCHEDULE,
+    stage: 'safe-morning-window',
     runUrl: 'https://github.com/example/repo/actions/runs/1',
     sha: '1234567890abcdef',
     lastSuccess: '2026-07-25',
@@ -115,10 +111,11 @@ test('issue body contains actionable preflight and final recovery status', () =>
       automation: 'skipped',
       cache: 'skipped'
     },
-    occurredAt: new Date('2026-07-26T03:13:00.000Z')
+    occurredAt: new Date('2026-07-25T21:17:00.000Z')
   });
 
-  assert.match(body, /12:13 최종 복구 실행/);
+  assert.match(body, /06:07·06:17/);
+  assert.match(body, /06:25 이후 자동 로그인은 수행하지 않습니다/);
   assert.match(body, /설정 사전검사/);
   assert.match(body, /UID and TOKEN/);
   assert.match(body, /GitHub Actions 실행 열기/);
