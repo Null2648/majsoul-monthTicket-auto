@@ -8,6 +8,19 @@ const MAX_GATEWAY_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const GATEWAY_HANDSHAKE_TIMEOUT_MS = 15000;
 const MAX_GATEWAY_CONNECTION_ATTEMPTS = 24;
 const MAX_GATEWAY_ATTEMPT_WINDOW_MS = 4 * 60 * 1000;
+const TRUSTED_GATEWAY_SUFFIXES = [
+  'mahjongsoul.com',
+  'yo-star.com',
+  'yostar.net',
+  'maj-soul.com'
+];
+
+function isTrustedGatewayDomain(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return TRUSTED_GATEWAY_SUFFIXES.some(
+    suffix => host === suffix || host.endsWith(`.${suffix}`)
+  );
+}
 
 function validateGatewayEndpoint(value) {
   let url;
@@ -23,6 +36,9 @@ function validateGatewayEndpoint(value) {
   }
   if (isUnsafeNetworkHostname(url.hostname)) {
     throw new Error(`MahjongSoul gateway resolved to an unsafe host: ${url.hostname}`);
+  }
+  if (!isTrustedGatewayDomain(url.hostname)) {
+    throw new Error(`MahjongSoul gateway is outside the reviewed service domains: ${url.hostname}`);
   }
   return url.toString();
 }
@@ -155,10 +171,12 @@ module.exports = {
   MAX_GATEWAY_ATTEMPT_WINDOW_MS,
   MAX_GATEWAY_CONNECTION_ATTEMPTS,
   MAX_GATEWAY_PAYLOAD_BYTES,
+  TRUSTED_GATEWAY_SUFFIXES,
   assertScheduledGatewayWindow,
   consumeGatewayAttempt,
   frameByteLength,
   installHardenedWebSocket,
+  isTrustedGatewayDomain,
   resetGatewayAttemptBudget,
   validateGatewayEndpoint
 };
