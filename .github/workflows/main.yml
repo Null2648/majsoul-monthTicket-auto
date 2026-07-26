@@ -89,7 +89,18 @@ jobs:
           retention-days: 14
 
       - name: Run tests
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee npm-test.log
+
+      - name: Upload test failure log
+        if: failure() && hashFiles('npm-test.log') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-test-log-${{ github.run_id }}
+          path: npm-test.log
+          retention-days: 7
 
       - name: Check current JP client metadata
         run: npm run check:jp
