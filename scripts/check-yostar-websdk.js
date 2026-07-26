@@ -9,6 +9,7 @@ const {
 const DIAGNOSTIC_PATH = 'yostar-safe-diagnostic.json';
 
 async function run() {
+  if (fs.existsSync(DIAGNOSTIC_PATH)) fs.unlinkSync(DIAGNOSTIC_PATH);
   installGlobalMetadataFetchGuard();
   const candidates = await loadOfficialWebSdkMetadataCandidates(
     'https://game.mahjongsoul.com/'
