@@ -48,6 +48,8 @@ function getFailureContext() {
   return {
     eventName: process.env.GITHUB_EVENT_NAME,
     schedule: event.schedule || '',
+    stage: process.env.ATTENDANCE_STAGE || automationReport?.stage || '',
+    source: process.env.ATTENDANCE_SOURCE || '',
     classification,
     summary: sanitizeMarkdownText(
       automationReport?.summary || protocolBreaking[0] ||
@@ -129,7 +131,7 @@ async function run() {
 
   if (!shouldNotifyFailure(context)) {
     return console.log(
-      `automation status notification -> primary transient failure deferred until fallback (${context.classification})`
+      `automation status notification -> transient failure deferred to a later recovery attempt (${context.classification})`
     );
   }
   if (incident) {
