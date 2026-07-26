@@ -1,15 +1,12 @@
 const fs = require('node:fs');
 
 const TIME_ZONE = 'Asia/Seoul';
-const EARLY_AUTOMATIC_LOGIN_SCHEDULE = '47,57 5 * * *';
-const AUTOMATIC_LOGIN_SCHEDULE = '7,17 6 * * *';
-const AUTOMATIC_LOGIN_SCHEDULES = Object.freeze([
-  EARLY_AUTOMATIC_LOGIN_SCHEDULE,
-  AUTOMATIC_LOGIN_SCHEDULE
-]);
+// 21:05 UTC is 06:05 KST on the following calendar day. Korea has no DST.
+// This exact single cron is the historically proven schedule for this repository.
+const AUTOMATIC_LOGIN_SCHEDULE = '5 21 * * *';
 const MORNING_RETRY_SCHEDULE = AUTOMATIC_LOGIN_SCHEDULE;
 const WATCHDOG_SCHEDULE = '50 6 * * *';
-const SAFE_LOGIN_WINDOW_START_MINUTES = 5 * 60 + 45;
+const SAFE_LOGIN_WINDOW_START_MINUTES = 6 * 60;
 const SAFE_LOGIN_WINDOW_END_MINUTES = 6 * 60 + 25;
 
 function getKstDateTimeParts(date = new Date()) {
@@ -55,12 +52,8 @@ function isWithinAutomaticLoginWindow(date = new Date()) {
   );
 }
 
-function isAutomaticLoginSchedule(schedule) {
-  return AUTOMATIC_LOGIN_SCHEDULES.includes(String(schedule || '').trim());
-}
-
 function scheduleStage(schedule) {
-  if (isAutomaticLoginSchedule(schedule)) return 'safe-morning-window';
+  if (schedule === AUTOMATIC_LOGIN_SCHEDULE) return 'safe-morning-window';
   if (schedule === WATCHDOG_SCHEDULE) return 'safety-watchdog';
   return schedule ? 'scheduled-other' : 'manual';
 }
@@ -129,7 +122,7 @@ function decideAttendanceRun({
   }
 
   if (scheduled) {
-    if (!isAutomaticLoginSchedule(schedule)) {
+    if (schedule !== AUTOMATIC_LOGIN_SCHEDULE) {
       return decision({
         shouldRun: false,
         reason: 'unsupported-schedule',
@@ -216,8 +209,6 @@ if (require.main === module) {
 
 module.exports = {
   AUTOMATIC_LOGIN_SCHEDULE,
-  AUTOMATIC_LOGIN_SCHEDULES,
-  EARLY_AUTOMATIC_LOGIN_SCHEDULE,
   MORNING_RETRY_SCHEDULE,
   SAFE_LOGIN_WINDOW_END_MINUTES,
   SAFE_LOGIN_WINDOW_START_MINUTES,
@@ -228,7 +219,6 @@ module.exports = {
   dispatchStage,
   formatKstDate,
   getKstDateTimeParts,
-  isAutomaticLoginSchedule,
   isWithinAutomaticLoginWindow,
   normalizeAttendanceDate,
   parseBoolean,
