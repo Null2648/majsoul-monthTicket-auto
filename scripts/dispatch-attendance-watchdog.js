@@ -32,7 +32,7 @@ async function dispatchAttendance({
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
         'User-Agent': 'majsoul-attendance-watchdog',
-        'X-GitHub-Api-Version': '2026-03-10'
+        'X-GitHub-Api-Version': '2022-11-28'
       },
       body: JSON.stringify({
         ref,
