@@ -7,6 +7,7 @@ const {
   MORNING_RETRY_SCHEDULE,
   WATCHDOG_SCHEDULE,
   decideAttendanceRun,
+  dispatchStage,
   formatKstDate,
   scheduleStage
 } = require('../src/attendance-schedule');
@@ -36,11 +37,13 @@ test('successful attendance marker suppresses every non-forced retry', () => {
   }
   const watchdogDispatch = decideAttendanceRun({
     eventName: 'workflow_dispatch',
+    source: 'watchdog',
     lastSuccess: '2026-07-26',
     now,
     force: false
   });
   assert.equal(watchdogDispatch.shouldRun, false);
+  assert.equal(watchdogDispatch.stage, 'watchdog-dispatch');
 });
 
 test('stale markers retry while manual force always runs', () => {
@@ -56,18 +59,32 @@ test('stale markers retry while manual force always runs', () => {
 
   const manual = decideAttendanceRun({
     eventName: 'workflow_dispatch',
+    source: 'manual',
     lastSuccess: '2026-07-26',
     now,
     force: true
   });
   assert.equal(manual.shouldRun, true);
   assert.equal(manual.reason, 'manual-force');
+  assert.equal(manual.stage, 'manual');
+
+  const manualNonForce = decideAttendanceRun({
+    eventName: 'workflow_dispatch',
+    source: 'manual',
+    lastSuccess: '2026-07-25',
+    now,
+    force: false
+  });
+  assert.equal(manualNonForce.shouldRun, true);
+  assert.equal(manualNonForce.stage, 'manual');
 });
 
-test('schedule stages describe retry and independent recovery paths', () => {
+test('schedule and dispatch stages describe recovery paths accurately', () => {
   assert.equal(scheduleStage(MORNING_RETRY_SCHEDULE), 'morning-retry-window');
   assert.equal(scheduleStage(FINAL_RECOVERY_SCHEDULE), 'final-recovery');
   assert.equal(scheduleStage(WATCHDOG_SCHEDULE), 'watchdog');
+  assert.equal(dispatchStage('watchdog'), 'watchdog-dispatch');
+  assert.equal(dispatchStage('manual'), 'manual');
 });
 
 test('watchdog dispatches main workflow with a deduplicating non-force input', async () => {
@@ -101,6 +118,7 @@ test('workflow definitions keep validation read-only and recovery independently 
   assert.match(main, /cron: '13 12 \* \* \*'/);
   assert.match(main, /group: majsoul-attendance\n\s+cancel-in-progress: false/);
   assert.match(main, /ATTENDANCE_FORCE: \$\{\{ inputs\.force \}\}/);
+  assert.match(main, /ATTENDANCE_SOURCE: \$\{\{ inputs\.source \}\}/);
   assert.match(main, /attendance:\n\s+if: >-[\s\S]*?github\.ref == 'refs\/heads\/main'/);
   assert.doesNotMatch(main, /cron: '17 6 \* \* \*'/);
   assert.match(watchdog, /cron: '31 11-14 \* \* \*'/);
