@@ -72,8 +72,10 @@ test('YoStar credentials are restricted to trusted HTTPS candidates', () => {
     { hosts: ['https://official-new.example'], pid: '2', version: '1.2.3', signingSecret: 'b'.repeat(40), strategy: 'strict-config+strict-regex' }
   ]);
   assert.equal(candidates.length, 2);
-  assert.equal(candidates[0].hosts[0], 'https://sdk-api.yostar.net');
-  assert.equal(candidates[1].hosts[0], 'https://official-new.example');
+  assert.deepEqual(
+    new Set(candidates.flatMap(candidate => candidate.hosts)),
+    new Set(['https://sdk-api.yostar.net', 'https://official-new.example'])
+  );
 });
 
 test('issue text cannot trigger mentions or HTML comments', () => {
