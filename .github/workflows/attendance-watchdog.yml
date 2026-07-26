@@ -41,7 +41,9 @@ jobs:
         run: node --test test/attendance-schedule.test.js
 
   dispatch:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
