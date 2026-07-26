@@ -84,7 +84,10 @@ function classifyAutomationError(error) {
   ) {
     return 'official-metadata';
   }
-  if (/YoStar WebSDK.*(?:metadata|version|host|PID|sign)|signing metadata|parse.*WebSDK/i.test(message)) {
+  if (
+    code === 'YOSTAR_REFRESH_TIMEOUT' ||
+    /YoStar WebSDK.*(?:metadata|version|host|PID|sign|credential refresh|candidate failed)|signing metadata|parse.*WebSDK/i.test(message)
+  ) {
     return 'yostar-metadata';
   }
   if (/client_version_string|version_str|client metadata candidates|resource version rejected/i.test(message)) {
