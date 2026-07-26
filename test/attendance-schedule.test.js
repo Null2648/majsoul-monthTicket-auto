@@ -85,6 +85,7 @@ test('watchdog dispatches main workflow with a deduplicating non-force input', a
   assert.match(request.url, /actions\/workflows\/main\.yml\/dispatches$/);
   assert.equal(request.init.method, 'POST');
   assert.equal(request.init.headers.Authorization, 'Bearer test-token');
+  assert.equal(request.init.headers['X-GitHub-Api-Version'], '2022-11-28');
   assert.deepEqual(JSON.parse(request.init.body), {
     ref: 'main',
     inputs: { force: 'false', source: 'watchdog' }
@@ -100,8 +101,10 @@ test('workflow definitions keep validation read-only and recovery independently 
   assert.match(main, /cron: '13 12 \* \* \*'/);
   assert.match(main, /group: majsoul-attendance\n\s+cancel-in-progress: false/);
   assert.match(main, /ATTENDANCE_FORCE: \$\{\{ inputs\.force \}\}/);
+  assert.match(main, /attendance:\n\s+if: >-[\s\S]*?github\.ref == 'refs\/heads\/main'/);
   assert.doesNotMatch(main, /cron: '17 6 \* \* \*'/);
   assert.match(watchdog, /cron: '31 11-14 \* \* \*'/);
+  assert.match(watchdog, /dispatch:\n\s+if: >-[\s\S]*?github\.ref == 'refs\/heads\/main'/);
   assert.match(watchdog, /actions: write/);
   assert.match(watchdog, /ref: main/);
   assert.match(watchdog, /persist-credentials: false/);
