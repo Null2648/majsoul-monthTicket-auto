@@ -28,9 +28,16 @@ function scheduleStage(schedule) {
   return schedule ? 'scheduled-other' : 'manual';
 }
 
+function dispatchStage(source) {
+  return String(source || '').trim().toLowerCase() === 'watchdog'
+    ? 'watchdog-dispatch'
+    : 'manual';
+}
+
 function decideAttendanceRun({
   eventName,
   schedule = '',
+  source = '',
   lastSuccess,
   now = new Date(),
   force = false
@@ -39,12 +46,13 @@ function decideAttendanceRun({
   const normalizedLastSuccess = normalizeAttendanceDate(lastSuccess);
   const manual = eventName === 'workflow_dispatch';
   const scheduled = eventName === 'schedule';
+  const stage = manual ? dispatchStage(source) : scheduleStage(schedule);
 
   if (!manual && !scheduled) {
     return {
       shouldRun: false,
       reason: 'unsupported-event',
-      stage: scheduleStage(schedule),
+      stage,
       today,
       lastSuccess: normalizedLastSuccess
     };
@@ -54,7 +62,7 @@ function decideAttendanceRun({
     return {
       shouldRun: true,
       reason: 'manual-force',
-      stage: 'manual',
+      stage,
       today,
       lastSuccess: normalizedLastSuccess
     };
@@ -64,7 +72,7 @@ function decideAttendanceRun({
     return {
       shouldRun: false,
       reason: 'already-completed',
-      stage: scheduleStage(schedule),
+      stage,
       today,
       lastSuccess: normalizedLastSuccess
     };
@@ -73,7 +81,7 @@ function decideAttendanceRun({
   return {
     shouldRun: true,
     reason: normalizedLastSuccess ? 'not-completed-today' : 'no-success-marker',
-    stage: manual ? 'watchdog-dispatch' : scheduleStage(schedule),
+    stage,
     today,
     lastSuccess: normalizedLastSuccess
   };
@@ -111,6 +119,7 @@ function runCli(argv = process.argv.slice(2), env = process.env) {
   const result = decideAttendanceRun({
     eventName: env.GITHUB_EVENT_NAME,
     schedule: env.ATTENDANCE_SCHEDULE || '',
+    source: env.ATTENDANCE_SOURCE || '',
     lastSuccess: readMarker(markerPath),
     now,
     force: parseBoolean(env.ATTENDANCE_FORCE, false)
@@ -139,6 +148,7 @@ module.exports = {
   WATCHDOG_SCHEDULE,
   appendGithubOutput,
   decideAttendanceRun,
+  dispatchStage,
   formatKstDate,
   normalizeAttendanceDate,
   parseBoolean,
