@@ -37,8 +37,7 @@ async function dispatchAttendance({
       body: JSON.stringify({
         ref,
         inputs: {
-          force: 'false',
-          source: 'watchdog'
+          force: 'false'
         }
       }),
       signal: AbortSignal.timeout(15000)
@@ -68,7 +67,7 @@ async function runCli(argv = process.argv.slice(2), env = process.env) {
   const status = await dispatchAttendance({
     repository: env.GITHUB_REPOSITORY,
     token: env.GITHUB_TOKEN,
-    ref: env.ATTENDANCE_REF || 'main'
+    ref: 'main'
   });
   console.log(`attendance watchdog -> dispatched main.yml (${status}, ${decision.reason})`);
   return { ...decision, dispatched: true, status };
