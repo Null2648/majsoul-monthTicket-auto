@@ -1,0 +1,1290 @@
+{
+  "schemaVersion": 2,
+  "sourceVersion": "0.11.252.w",
+  "protocolHash": "3d9191ef064daeed099feb482501e2d24e7c1da80a738e9b671b4618f178fed2",
+  "contractHash": "48aec89fb5cdc42bdbd7b8f6ccdeb6d337e9918b031e0afb1fae4bf8fc4d3a75",
+  "compatibilityPatches": [
+    {
+      "path": "lq.ReqRequestConnection.platform",
+      "reason": "legacy Web route compatibility",
+      "injected": {
+        "type": "string",
+        "id": 6,
+        "rule": "optional"
+      }
+    }
+  ],
+  "rpcs": {
+    "lq.Route.requestConnection": {
+      "service": "lq.Route",
+      "method": "requestConnection",
+      "requestType": "lq.ReqRequestConnection",
+      "responseType": "lq.ResRequestConnection",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "type": [
+          {
+            "ownerType": "lq.ReqRequestConnection",
+            "name": "type",
+            "id": 2,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "route_id": [
+          {
+            "ownerType": "lq.ReqRequestConnection",
+            "name": "route_id",
+            "id": 3,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "timestamp": [
+          {
+            "ownerType": "lq.ReqRequestConnection",
+            "name": "timestamp",
+            "id": 4,
+            "type": "uint64",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "platform": [
+          {
+            "ownerType": "lq.ReqRequestConnection",
+            "name": "platform",
+            "id": 6,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResRequestConnection",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Route.heartbeat": {
+      "service": "lq.Route",
+      "method": "heartbeat",
+      "requestType": "lq.ReqHeartbeat",
+      "responseType": "lq.ResHeartbeat",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "delay": [
+          {
+            "ownerType": "lq.ReqHeartbeat",
+            "name": "delay",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "no_operation_counter": [
+          {
+            "ownerType": "lq.ReqHeartbeat",
+            "name": "no_operation_counter",
+            "id": 2,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "platform": [
+          {
+            "ownerType": "lq.ReqHeartbeat",
+            "name": "platform",
+            "id": 3,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "network_quality": [
+          {
+            "ownerType": "lq.ReqHeartbeat",
+            "name": "network_quality",
+            "id": 4,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResHeartbeat",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.login": {
+      "service": "lq.Lobby",
+      "method": "login",
+      "requestType": "lq.ReqLogin",
+      "responseType": "lq.ResLogin",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "account": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "account",
+            "id": 1,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "password": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "password",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "reconnect": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "reconnect",
+            "id": 3,
+            "type": "bool",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.platform": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "platform",
+            "id": 1,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.hardware": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "hardware",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.os": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "os",
+            "id": 3,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.os_version": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "os_version",
+            "id": 4,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.is_browser": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "is_browser",
+            "id": 5,
+            "type": "bool",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.software": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "software",
+            "id": 6,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.sale_platform": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "sale_platform",
+            "id": 7,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.hardware_vendor": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "hardware_vendor",
+            "id": 8,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.model_number": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "model_number",
+            "id": 9,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.screen_width": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "screen_width",
+            "id": 10,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.screen_height": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "screen_height",
+            "id": 11,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.user_agent": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "user_agent",
+            "id": 12,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.screen_type": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "screen_type",
+            "id": 13,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "random_key": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "random_key",
+            "id": 5,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version.resource": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "client_version",
+            "id": 6,
+            "type": "lq.ClientVersionInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientVersionInfo",
+            "name": "resource",
+            "id": 1,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version.package": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "client_version",
+            "id": 6,
+            "type": "lq.ClientVersionInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientVersionInfo",
+            "name": "package",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "gen_access_token": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "gen_access_token",
+            "id": 7,
+            "type": "bool",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "currency_platforms": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "currency_platforms",
+            "id": 8,
+            "type": "uint32",
+            "rule": "repeated",
+            "keyType": null
+          }
+        ],
+        "type": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "type",
+            "id": 9,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version_string": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "client_version_string",
+            "id": 11,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "tag": [
+          {
+            "ownerType": "lq.ReqLogin",
+            "name": "tag",
+            "id": 12,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResLogin",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "account": [
+          {
+            "ownerType": "lq.ResLogin",
+            "name": "account",
+            "id": 3,
+            "type": "lq.Account",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "account.gold": [
+          {
+            "ownerType": "lq.ResLogin",
+            "name": "account",
+            "id": 3,
+            "type": "lq.Account",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Account",
+            "name": "gold",
+            "id": 11,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.oauth2Check": {
+      "service": "lq.Lobby",
+      "method": "oauth2Check",
+      "requestType": "lq.ReqOauth2Check",
+      "responseType": "lq.ResOauth2Check",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "type": [
+          {
+            "ownerType": "lq.ReqOauth2Check",
+            "name": "type",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "access_token": [
+          {
+            "ownerType": "lq.ReqOauth2Check",
+            "name": "access_token",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResOauth2Check",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "has_account": [
+          {
+            "ownerType": "lq.ResOauth2Check",
+            "name": "has_account",
+            "id": 2,
+            "type": "bool",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.oauth2Auth": {
+      "service": "lq.Lobby",
+      "method": "oauth2Auth",
+      "requestType": "lq.ReqOauth2Auth",
+      "responseType": "lq.ResOauth2Auth",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "type": [
+          {
+            "ownerType": "lq.ReqOauth2Auth",
+            "name": "type",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "code": [
+          {
+            "ownerType": "lq.ReqOauth2Auth",
+            "name": "code",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "uid": [
+          {
+            "ownerType": "lq.ReqOauth2Auth",
+            "name": "uid",
+            "id": 3,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version_string": [
+          {
+            "ownerType": "lq.ReqOauth2Auth",
+            "name": "client_version_string",
+            "id": 4,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResOauth2Auth",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "access_token": [
+          {
+            "ownerType": "lq.ResOauth2Auth",
+            "name": "access_token",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.oauth2Login": {
+      "service": "lq.Lobby",
+      "method": "oauth2Login",
+      "requestType": "lq.ReqOauth2Login",
+      "responseType": "lq.ResLogin",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "type": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "type",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "access_token": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "access_token",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "reconnect": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "reconnect",
+            "id": 3,
+            "type": "bool",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.platform": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "platform",
+            "id": 1,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.hardware": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "hardware",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.os": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "os",
+            "id": 3,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.os_version": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "os_version",
+            "id": 4,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.is_browser": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "is_browser",
+            "id": 5,
+            "type": "bool",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.software": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "software",
+            "id": 6,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.sale_platform": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "sale_platform",
+            "id": 7,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.hardware_vendor": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "hardware_vendor",
+            "id": 8,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.model_number": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "model_number",
+            "id": 9,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.screen_width": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "screen_width",
+            "id": 10,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.screen_height": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "screen_height",
+            "id": 11,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.user_agent": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "user_agent",
+            "id": 12,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "device.screen_type": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "device",
+            "id": 4,
+            "type": "lq.ClientDeviceInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientDeviceInfo",
+            "name": "screen_type",
+            "id": 13,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "random_key": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "random_key",
+            "id": 5,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version.resource": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "client_version",
+            "id": 6,
+            "type": "lq.ClientVersionInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientVersionInfo",
+            "name": "resource",
+            "id": 1,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version.package": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "client_version",
+            "id": 6,
+            "type": "lq.ClientVersionInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ClientVersionInfo",
+            "name": "package",
+            "id": 2,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "client_version_string": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "client_version_string",
+            "id": 10,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "currency_platforms": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "currency_platforms",
+            "id": 8,
+            "type": "uint32",
+            "rule": "repeated",
+            "keyType": null
+          }
+        ],
+        "tag": [
+          {
+            "ownerType": "lq.ReqOauth2Login",
+            "name": "tag",
+            "id": 11,
+            "type": "string",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResLogin",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "account": [
+          {
+            "ownerType": "lq.ResLogin",
+            "name": "account",
+            "id": 3,
+            "type": "lq.Account",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "account.gold": [
+          {
+            "ownerType": "lq.ResLogin",
+            "name": "account",
+            "id": 3,
+            "type": "lq.Account",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Account",
+            "name": "gold",
+            "id": 11,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.payMonthTicket": {
+      "service": "lq.Lobby",
+      "method": "payMonthTicket",
+      "requestType": "lq.ReqCommon",
+      "responseType": "lq.ResPayMonthTicket",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {},
+      "responsePaths": {},
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.fetchMonthTicketInfo": {
+      "service": "lq.Lobby",
+      "method": "fetchMonthTicketInfo",
+      "requestType": "lq.ReqCommon",
+      "responseType": "lq.ResMonthTicketInfo",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {},
+      "responsePaths": {},
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.gainReviveCoin": {
+      "service": "lq.Lobby",
+      "method": "gainReviveCoin",
+      "requestType": "lq.ReqCommon",
+      "responseType": "lq.ResCommon",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {},
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResCommon",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.fetchShopInfo": {
+      "service": "lq.Lobby",
+      "method": "fetchShopInfo",
+      "requestType": "lq.ReqCommon",
+      "responseType": "lq.ResShopInfo",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {},
+      "responsePaths": {
+        "shop_info": [
+          {
+            "ownerType": "lq.ResShopInfo",
+            "name": "shop_info",
+            "id": 2,
+            "type": "lq.ShopInfo",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "shop_info.zhp": [
+          {
+            "ownerType": "lq.ResShopInfo",
+            "name": "shop_info",
+            "id": 2,
+            "type": "lq.ShopInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ShopInfo",
+            "name": "zhp",
+            "id": 1,
+            "type": "lq.ZHPShop",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "shop_info.zhp.goods": [
+          {
+            "ownerType": "lq.ResShopInfo",
+            "name": "shop_info",
+            "id": 2,
+            "type": "lq.ShopInfo",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ShopInfo",
+            "name": "zhp",
+            "id": 1,
+            "type": "lq.ZHPShop",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.ZHPShop",
+            "name": "goods",
+            "id": 1,
+            "type": "uint32",
+            "rule": "repeated",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    },
+    "lq.Lobby.buyFromZHP": {
+      "service": "lq.Lobby",
+      "method": "buyFromZHP",
+      "requestType": "lq.ReqBuyFromZHP",
+      "responseType": "lq.ResCommon",
+      "requestStream": false,
+      "responseStream": false,
+      "requestPaths": {
+        "goods_id": [
+          {
+            "ownerType": "lq.ReqBuyFromZHP",
+            "name": "goods_id",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ],
+        "count": [
+          {
+            "ownerType": "lq.ReqBuyFromZHP",
+            "name": "count",
+            "id": 2,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "responsePaths": {
+        "error.code": [
+          {
+            "ownerType": "lq.ResCommon",
+            "name": "error",
+            "id": 1,
+            "type": "lq.Error",
+            "rule": "optional",
+            "keyType": null
+          },
+          {
+            "ownerType": "lq.Error",
+            "name": "code",
+            "id": 1,
+            "type": "uint32",
+            "rule": "optional",
+            "keyType": null
+          }
+        ]
+      },
+      "requiredRequestPaths": []
+    }
+  }
+}

@@ -12,5 +12,44 @@
   "buildIds": {
     "jp": "jp-WebGL-release-4.0.11(12)"
   },
-  "updatedAt": "2026-07-23T17:17:38.009Z"
+  "updatedAt": "2026-07-23T17:17:38.009Z",
+  "structureHints": {
+    "jp": {
+      "sourceVersion": "0.11.252.w",
+      "productVersion": "4.0.11",
+      "buildId": "jp-WebGL-release-4.0.11(12)",
+      "configUrls": [
+        "https://game.mahjongsoul.com/config.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/config.json",
+        "https://game.mahjongsoul.com/client-config.json",
+        "https://game.mahjongsoul.com/client_config.json",
+        "https://game.mahjongsoul.com/config/client.json",
+        "https://game.mahjongsoul.com/StreamingAssets/config.json",
+        "https://game.mahjongsoul.com/Build/config.json"
+      ],
+      "manifestUrls": [
+        "https://game.mahjongsoul.com/resversion0.11.252.w.json",
+        "https://game.mahjongsoul.com/resversion-0.11.252.w.json",
+        "https://game.mahjongsoul.com/resversion_0.11.252.w.json",
+        "https://game.mahjongsoul.com/resversion.json",
+        "https://game.mahjongsoul.com/resmanifest.json",
+        "https://game.mahjongsoul.com/resource-manifest.json",
+        "https://game.mahjongsoul.com/manifest.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/resversion0.11.252.w.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/resversion-0.11.252.w.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/resversion_0.11.252.w.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/resversion.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/resmanifest.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/resource-manifest.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/manifest.json"
+      ],
+      "liqiUrls": [
+        "https://game.mahjongsoul.com/res/proto/liqi.json",
+        "https://game.mahjongsoul.com/proto/liqi.json",
+        "https://game.mahjongsoul.com/assets/res/proto/liqi.json",
+        "https://game.mahjongsoul.com/StreamingAssets/res/proto/liqi.json",
+        "https://game.mahjongsoul.com/v0.11.252.w/res/proto/liqi.json"
+      ]
+    }
+  }
 }
