@@ -13,20 +13,37 @@ const {
   clearAutomationFailureReport,
   writeAutomationFailureReport
 } = require('./automation-alert');
+const {
+  installHardenedWebSocket
+} = require('./websocket-hardening');
 
 function installHardenedYostarExports() {
   const current = require('./yostar-websdk');
-  const hardened = require('./yostar-websdk-hardened');
-  current.loadOfficialWebSdkMetadata = hardened.loadOfficialWebSdkMetadata;
-  current.loadOfficialWebSdkMetadataCandidates = hardened.loadOfficialWebSdkMetadataCandidates;
-  current.refreshYostarCredentials = hardened.refreshYostarCredentials;
+  const safe = require('./yostar-websdk-safe');
+  const cache = require('./auth-cache-hardening');
+  current.loadOfficialWebSdkMetadata = safe.loadOfficialWebSdkMetadata;
+  current.loadOfficialWebSdkMetadataCandidates = safe.loadOfficialWebSdkMetadataCandidates;
+  current.refreshYostarCredentials = safe.refreshYostarCredentials;
+  current.readTokenCache = cache.readTokenCache;
+  current.saveTokenCache = cache.saveTokenCache;
+}
+
+function wrapProtocolSafetyError(error) {
+  if (error?.code === 'PROTOCOL_BREAKING_CHANGE') return error;
+  const wrapped = new Error(
+    `Protocol safety validation could not complete before attendance: ${error?.message || error}`,
+    { cause: error }
+  );
+  wrapped.code = error?.code || 'PROTOCOL_SAFETY_UNAVAILABLE';
+  wrapped.retryable = false;
+  return wrapped;
 }
 
 async function bootstrap() {
   let structure;
-  let protocolPrepared = false;
   clearAutomationFailureReport();
   installGlobalMetadataFetchGuard();
+  installHardenedWebSocket();
   installHardenedYostarExports();
 
   try {
@@ -34,18 +51,15 @@ async function bootstrap() {
     scopeStructureFetch(structure);
   } catch (error) {
     console.warn(
-      `official structure discovery unavailable: ${error?.message || error}; continuing with legacy paths`
+      `official structure discovery first pass unavailable: ${error?.message || error}; ` +
+      'the mandatory protocol check will retry discovery'
     );
   }
 
   try {
     await prepareProtocolMonitor({ structure });
-    protocolPrepared = true;
   } catch (error) {
-    if (error?.code === 'PROTOCOL_BREAKING_CHANGE') throw error;
-    console.warn(
-      `protocol monitor unavailable: ${error?.message || error}; continuing with the live protocol loader`
-    );
+    throw wrapProtocolSafetyError(error);
   }
 
   try {
@@ -62,10 +76,8 @@ async function bootstrap() {
   const { run } = require('./index');
   await run();
 
-  if (protocolPrepared) {
-    const changed = finalizeProtocolSnapshot();
-    if (changed) console.log('protocol baseline updated after successful attendance');
-  }
+  const changed = finalizeProtocolSnapshot();
+  if (changed) console.log('protocol baseline updated after successful attendance');
 }
 
 if (require.main === module) {
@@ -80,4 +92,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { bootstrap, installHardenedYostarExports };
+module.exports = {
+  bootstrap,
+  installHardenedYostarExports,
+  wrapProtocolSafetyError
+};
