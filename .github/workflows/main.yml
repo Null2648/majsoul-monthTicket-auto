@@ -1,23 +1,20 @@
 name: Login to Majsoul
+run-name: >-
+  Login to Majsoul · ${{ github.event_name == 'workflow_dispatch' && 'manual' || github.event_name }} · ${{ github.ref_name }}
 
 on:
   schedule:
-    - cron: '7,22,37,52 6-10 * * *'
+    - cron: '17 6-10 * * *'
       timezone: 'Asia/Seoul'
     - cron: '13 12 * * *'
       timezone: 'Asia/Seoul'
   workflow_dispatch:
     inputs:
       force:
-        description: 'Run even when attendance already succeeded today'
+        description: '오늘 이미 성공했어도 다시 실행'
         required: false
         default: true
         type: boolean
-      source:
-        description: 'Dispatch source'
-        required: false
-        default: 'manual'
-        type: string
   push:
     branches:
       - main
@@ -92,7 +89,18 @@ jobs:
           retention-days: 14
 
       - name: Run tests
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee npm-test.log
+
+      - name: Upload test failure log
+        if: failure() && hashFiles('npm-test.log') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-test-log-${{ github.run_id }}
+          path: npm-test.log
+          retention-days: 7
 
       - name: Check current JP client metadata
         run: npm run check:jp
@@ -127,12 +135,41 @@ jobs:
           path: protocol-change-report.json
           retention-days: 14
 
-  attendance:
-    if: >-
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main'
+  manual_ref_check:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 2
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify manual run branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+            echo "::error title=main 브랜치를 선택하세요::수동 출석은 계정 Secret 보호를 위해 main 브랜치에서만 실행됩니다. Run workflow 창의 Use workflow from을 main으로 바꾼 뒤 다시 실행하세요."
+            {
+              echo '## 수동 실행이 시작되지 않은 이유'
+              echo
+              echo "선택된 ref: \`${GITHUB_REF}\`"
+              echo
+              echo '수동 출석은 계정 Secret 보호를 위해 `main` 브랜치에서만 실행됩니다.'
+              echo '`Run workflow` 창의 `Use workflow from`을 `main`으로 선택한 뒤 다시 실행하세요.'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          echo '수동 실행 ref 확인: main' >> "${GITHUB_STEP_SUMMARY}"
+
+  attendance:
+    needs: manual_ref_check
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && needs.manual_ref_check.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     concurrency:
       group: majsoul-attendance
       cancel-in-progress: false
@@ -141,9 +178,10 @@ jobs:
       issues: write
 
     steps:
-      - name: Checkout repository without persisted credentials
+      - name: Checkout trusted main branch
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: main
           persist-credentials: false
 
       - name: Set up Node.js
@@ -157,8 +195,8 @@ jobs:
         shell: bash
         env:
           ATTENDANCE_SCHEDULE: ${{ github.event.schedule }}
-          ATTENDANCE_FORCE: ${{ inputs.force }}
-          ATTENDANCE_SOURCE: ${{ inputs.source }}
+          ATTENDANCE_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
         run: |
           set -euo pipefail
           marker="${RUNNER_TEMP}/last-attendance-kst.txt"
@@ -166,18 +204,30 @@ jobs:
           git show refs/remotes/origin/main:last-attendance-kst.txt > "${marker}" 2>/dev/null || :
           node src/attendance-schedule.js "${marker}"
 
-      - name: Install dependencies
+      - name: Validate attendance configuration
+        id: preflight
         if: steps.decision.outputs.should_run == 'true'
-        run: npm ci
+        run: node scripts/preflight-attendance.js
+        env:
+          MAJSOUL_UID: ${{ secrets.UID }}
+          MAJSOUL_TOKEN: ${{ secrets.TOKEN }}
+          MAJSOUL_ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          MAJSOUL_YOSTAR_DEVICE_ID: ${{ secrets.YOSTAR_DEVICE_ID }}
+          MAJSOUL_EMAIL: ${{ secrets.EMAIL }}
+          MAJSOUL_PASSWORD: ${{ secrets.PASSWORD }}
+          MS_SERVER: ${{ secrets.MS_SERVER }}
 
-      - name: Run tests
-        id: tests
-        if: steps.decision.outputs.should_run == 'true'
-        run: npm test
+      - name: Install runtime dependencies
+        id: install
+        if: steps.decision.outputs.should_run == 'true' && steps.preflight.outcome == 'success'
+        run: npm ci --omit=dev --ignore-scripts
 
       - name: Execute month ticket automation
         id: automation
-        if: steps.decision.outputs.should_run == 'true'
+        if: >-
+          steps.decision.outputs.should_run == 'true' &&
+          steps.preflight.outcome == 'success' &&
+          steps.install.outcome == 'success'
         run: npm start
         env:
           UID: ${{ secrets.UID }}
@@ -188,7 +238,7 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           MS_SERVER: ${{ secrets.MS_SERVER }}
 
-      - name: Update Keep-Alive and Runtime Cache
+      - name: Update successful attendance state
         id: cache
         if: success() && steps.decision.outputs.should_run == 'true'
         shell: bash
@@ -197,31 +247,45 @@ jobs:
           echo "Last run: $(date --iso-8601=seconds)" > keep_alive.txt
           TZ=Asia/Seoul date +%F > last-attendance-kst.txt
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add keep_alive.txt last-attendance-kst.txt resource-version.json auth-cache.json protocol-snapshot.json
-          git diff --cached --quiet || git commit -m "Update runtime cache [skip ci]"
+          git diff --cached --quiet || git commit -m 'Update runtime cache [skip ci]'
 
           auth="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w0)"
           echo "::add-mask::${auth}"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
           trap 'git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true' EXIT
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git pull --rebase origin main
+          git push origin HEAD:main
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Upload automation failure diagnostics
-        if: >-
-          always() &&
-          steps.decision.outputs.should_run == 'true' &&
-          (hashFiles('automation-failure-report.json') != '' ||
-          hashFiles('protocol-change-report.json') != '')
+      - name: Write attendance run report
+        if: always()
+        run: node scripts/write-attendance-run-report.js
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DECISION_OUTCOME: ${{ steps.decision.outcome }}
+          SHOULD_RUN: ${{ steps.decision.outputs.should_run }}
+          DECISION_REASON: ${{ steps.decision.outputs.reason }}
+          ATTENDANCE_STAGE: ${{ steps.decision.outputs.stage }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
+          ATTENDANCE_TODAY: ${{ steps.decision.outputs.today }}
+          LAST_SUCCESS: ${{ steps.decision.outputs.last_success }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          AUTOMATION_OUTCOME: ${{ steps.automation.outcome }}
+          CACHE_OUTCOME: ${{ steps.cache.outcome }}
+
+      - name: Upload manual or failed run diagnostics
+        if: always() && (github.event_name == 'workflow_dispatch' || job.status != 'success')
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: automation-failure-diagnostics-${{ github.run_id }}
+          name: attendance-diagnostics-${{ github.run_id }}
           path: |
+            attendance-run-report.json
             automation-failure-report.json
             protocol-change-report.json
           if-no-files-found: ignore
@@ -236,11 +300,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
-          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          TESTS_OUTCOME: skipped
           JP_OUTCOME: skipped
           YOSTAR_OUTCOME: skipped
           PROTOCOL_OUTCOME: skipped
           AUTOMATION_OUTCOME: ${{ steps.automation.outcome }}
           CACHE_OUTCOME: ${{ steps.cache.outcome }}
           ATTENDANCE_STAGE: ${{ steps.decision.outputs.stage }}
-          ATTENDANCE_SOURCE: ${{ inputs.source }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}

@@ -1,9 +1,9 @@
 const fs = require('node:fs');
 
 const TIME_ZONE = 'Asia/Seoul';
-const MORNING_RETRY_SCHEDULE = '7,22,37,52 6-10 * * *';
+const MORNING_RETRY_SCHEDULE = '17 6-10 * * *';
 const FINAL_RECOVERY_SCHEDULE = '13 12 * * *';
-const WATCHDOG_SCHEDULE = '31 11-14 * * *';
+const WATCHDOG_SCHEDULE = '31 11,13 * * *';
 
 function formatKstDate(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {

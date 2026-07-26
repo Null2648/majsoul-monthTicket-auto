@@ -24,6 +24,8 @@ function getFailureContext() {
   const protocolReport = readJsonFile(PROTOCOL_REPORT_PATH);
   const protocolBreaking = Array.isArray(protocolReport?.breaking) ? protocolReport.breaking : [];
   const outcomes = {
+    preflight: process.env.PREFLIGHT_OUTCOME,
+    install: process.env.INSTALL_OUTCOME,
     tests: process.env.TESTS_OUTCOME,
     jp: process.env.JP_OUTCOME,
     yostar: process.env.YOSTAR_OUTCOME,
@@ -34,10 +36,12 @@ function getFailureContext() {
 
   let classification = automationReport?.classification;
   if (protocolBreaking.length) classification = 'protocol-breaking';
+  if (!classification && outcomes.preflight === 'failure') classification = 'configuration';
   if (!classification && outcomes.jp === 'failure') classification = 'official-metadata';
   if (!classification && outcomes.yostar === 'failure') classification = 'yostar-metadata';
   if (!classification && outcomes.protocol === 'failure') classification = 'protocol-breaking';
   if (!classification && outcomes.tests === 'failure') classification = 'test-failure';
+  if (!classification && outcomes.install === 'failure') classification = 'dependency-install';
   if (!classification && outcomes.cache === 'failure') classification = 'cache-update';
   if (!classification) classification = 'runtime';
 
@@ -104,6 +108,19 @@ async function findOpenIncident(owner, repo) {
   return null;
 }
 
+function supportsIssueNotifications(repository) {
+  return repository?.has_issues !== false;
+}
+
+function appendNotificationSummary(message, summaryPath = process.env.GITHUB_STEP_SUMMARY) {
+  if (!summaryPath) return;
+  fs.appendFileSync(
+    summaryPath,
+    `\n## 장애 알림\n\n${sanitizeMarkdownText(message)}\n`,
+    'utf8'
+  );
+}
+
 function addIssueComment(owner, repo, issueNumber, body) {
   return githubApi(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments`,
@@ -117,6 +134,12 @@ async function run() {
   if (!owner || !repo) throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
   const context = getFailureContext();
   const jobSucceeded = process.env.JOB_STATUS === 'success';
+  const repositoryInfo = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  if (!supportsIssueNotifications(repositoryInfo)) {
+    const message = '저장소 Issues 기능이 비활성화되어 장애 이슈를 생성하지 않았습니다. 실행 Summary와 진단 아티팩트를 확인하세요.';
+    appendNotificationSummary(message);
+    return console.log(`automation status notification -> ${message}`);
+  }
   const incident = await findOpenIncident(owner, repo);
 
   if (jobSucceeded) {
@@ -152,4 +175,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { findOpenIncident, getFailureContext, githubApi, readEventPayload, run };
+module.exports = {
+  appendNotificationSummary,
+  findOpenIncident,
+  getFailureContext,
+  githubApi,
+  readEventPayload,
+  run,
+  supportsIssueNotifications
+};
