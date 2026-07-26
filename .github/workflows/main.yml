@@ -72,6 +72,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/diagnose-run-168.js
 
+      - name: Upload run #168 diagnostic
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: run-168-diagnostic
+          path: run-168-diagnostic.json
+          retention-days: 1
+
       - name: Install dependencies
         run: npm ci
 
