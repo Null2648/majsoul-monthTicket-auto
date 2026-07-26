@@ -1,19 +1,39 @@
 const fs = require('node:fs');
 
 const TIME_ZONE = 'Asia/Seoul';
-const MORNING_RETRY_SCHEDULE = '17 6-10 * * *';
-const FINAL_RECOVERY_SCHEDULE = '13 12 * * *';
-const WATCHDOG_SCHEDULE = '31 11,13 * * *';
+const AUTOMATIC_LOGIN_SCHEDULE = '7,17 6 * * *';
+const MORNING_RETRY_SCHEDULE = AUTOMATIC_LOGIN_SCHEDULE;
+const WATCHDOG_SCHEDULE = '50 6 * * *';
+const SAFE_LOGIN_WINDOW_START_MINUTES = 6 * 60;
+const SAFE_LOGIN_WINDOW_END_MINUTES = 6 * 60 + 25;
 
-function formatKstDate(date = new Date()) {
+function getKstDateTimeParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
-    day: '2-digit'
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
   }).formatToParts(date);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second)
+  };
+}
+
+function formatKstDate(date = new Date()) {
+  const value = getKstDateTimeParts(date);
+  return [value.year, value.month, value.day]
+    .map((part, index) => index === 0 ? String(part) : String(part).padStart(2, '0'))
+    .join('-');
 }
 
 function normalizeAttendanceDate(value) {
@@ -21,17 +41,27 @@ function normalizeAttendanceDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
 }
 
+function isWithinAutomaticLoginWindow(date = new Date()) {
+  const value = getKstDateTimeParts(date);
+  const minutes = value.hour * 60 + value.minute;
+  return (
+    minutes >= SAFE_LOGIN_WINDOW_START_MINUTES &&
+    minutes < SAFE_LOGIN_WINDOW_END_MINUTES
+  );
+}
+
 function scheduleStage(schedule) {
-  if (schedule === MORNING_RETRY_SCHEDULE) return 'morning-retry-window';
-  if (schedule === FINAL_RECOVERY_SCHEDULE) return 'final-recovery';
-  if (schedule === WATCHDOG_SCHEDULE) return 'watchdog';
+  if (schedule === AUTOMATIC_LOGIN_SCHEDULE) return 'safe-morning-window';
+  if (schedule === WATCHDOG_SCHEDULE) return 'safety-watchdog';
   return schedule ? 'scheduled-other' : 'manual';
 }
 
-function dispatchStage(source) {
-  return String(source || '').trim().toLowerCase() === 'watchdog'
-    ? 'watchdog-dispatch'
-    : 'manual';
+function dispatchStage() {
+  return 'manual';
+}
+
+function decision({ shouldRun, reason, stage, today, lastSuccess }) {
+  return { shouldRun, reason, stage, today, lastSuccess };
 }
 
 function decideAttendanceRun({
@@ -40,7 +70,8 @@ function decideAttendanceRun({
   source = '',
   lastSuccess,
   now = new Date(),
-  force = false
+  force = false,
+  confirmSafeLogin = false
 }) {
   const today = formatKstDate(now);
   const normalizedLastSuccess = normalizeAttendanceDate(lastSuccess);
@@ -49,42 +80,74 @@ function decideAttendanceRun({
   const stage = manual ? dispatchStage(source) : scheduleStage(schedule);
 
   if (!manual && !scheduled) {
-    return {
+    return decision({
       shouldRun: false,
       reason: 'unsupported-event',
       stage,
       today,
       lastSuccess: normalizedLastSuccess
-    };
+    });
   }
 
-  if (manual && force) {
-    return {
-      shouldRun: true,
-      reason: 'manual-force',
+  if (manual && !confirmSafeLogin) {
+    return decision({
+      shouldRun: false,
+      reason: 'manual-safety-confirmation-required',
       stage,
       today,
       lastSuccess: normalizedLastSuccess
-    };
+    });
+  }
+
+  if (manual && force) {
+    return decision({
+      shouldRun: true,
+      reason: 'manual-force-confirmed',
+      stage,
+      today,
+      lastSuccess: normalizedLastSuccess
+    });
   }
 
   if (normalizedLastSuccess === today) {
-    return {
+    return decision({
       shouldRun: false,
       reason: 'already-completed',
       stage,
       today,
       lastSuccess: normalizedLastSuccess
-    };
+    });
   }
 
-  return {
+  if (scheduled) {
+    if (schedule !== AUTOMATIC_LOGIN_SCHEDULE) {
+      return decision({
+        shouldRun: false,
+        reason: 'unsupported-schedule',
+        stage,
+        today,
+        lastSuccess: normalizedLastSuccess
+      });
+    }
+
+    if (!isWithinAutomaticLoginWindow(now)) {
+      return decision({
+        shouldRun: false,
+        reason: 'outside-safe-login-window',
+        stage,
+        today,
+        lastSuccess: normalizedLastSuccess
+      });
+    }
+  }
+
+  return decision({
     shouldRun: true,
     reason: normalizedLastSuccess ? 'not-completed-today' : 'no-success-marker',
     stage,
     today,
     lastSuccess: normalizedLastSuccess
-  };
+  });
 }
 
 function readMarker(filePath) {
@@ -122,7 +185,8 @@ function runCli(argv = process.argv.slice(2), env = process.env) {
     source: env.ATTENDANCE_SOURCE || '',
     lastSuccess: readMarker(markerPath),
     now,
-    force: parseBoolean(env.ATTENDANCE_FORCE, false)
+    force: parseBoolean(env.ATTENDANCE_FORCE, false),
+    confirmSafeLogin: parseBoolean(env.ATTENDANCE_CONFIRM_SAFE_LOGIN, false)
   });
   appendGithubOutput(result, env.GITHUB_OUTPUT);
   console.log(
@@ -142,14 +206,18 @@ if (require.main === module) {
 }
 
 module.exports = {
-  FINAL_RECOVERY_SCHEDULE,
+  AUTOMATIC_LOGIN_SCHEDULE,
   MORNING_RETRY_SCHEDULE,
+  SAFE_LOGIN_WINDOW_END_MINUTES,
+  SAFE_LOGIN_WINDOW_START_MINUTES,
   TIME_ZONE,
   WATCHDOG_SCHEDULE,
   appendGithubOutput,
   decideAttendanceRun,
   dispatchStage,
   formatKstDate,
+  getKstDateTimeParts,
+  isWithinAutomaticLoginWindow,
   normalizeAttendanceDate,
   parseBoolean,
   readMarker,

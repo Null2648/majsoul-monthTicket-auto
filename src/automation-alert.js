@@ -1,8 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  FINAL_RECOVERY_SCHEDULE,
-  MORNING_RETRY_SCHEDULE
+  AUTOMATIC_LOGIN_SCHEDULE
 } = require('./attendance-schedule');
 
 const AUTOMATION_FAILURE_REPORT_PATH = path.join(
@@ -11,8 +10,8 @@ const AUTOMATION_FAILURE_REPORT_PATH = path.join(
 );
 const INCIDENT_MARKER = '<!-- majsoul-attendance-alert -->';
 const INCIDENT_TITLE = '[자동 출석 장애] 점검 필요';
-const PRIMARY_SCHEDULE = MORNING_RETRY_SCHEDULE;
-const FALLBACK_SCHEDULE = FINAL_RECOVERY_SCHEDULE;
+const PRIMARY_SCHEDULE = AUTOMATIC_LOGIN_SCHEDULE;
+const FALLBACK_SCHEDULE = null;
 const IMMEDIATE_CLASSIFICATIONS = new Set([
   'configuration',
   'protocol-breaking',
@@ -146,8 +145,7 @@ function readJsonFile(filePath) {
 function shouldNotifyFailure({ eventName, schedule, classification, stage }) {
   if (eventName === 'workflow_dispatch') return true;
   if (eventName !== 'schedule') return false;
-  if (schedule === FALLBACK_SCHEDULE || stage === 'final-recovery') return true;
-  if (schedule === PRIMARY_SCHEDULE || stage === 'morning-retry-window') {
+  if (schedule === PRIMARY_SCHEDULE || stage === 'safe-morning-window') {
     return IMMEDIATE_CLASSIFICATIONS.has(classification);
   }
   return true;
@@ -169,11 +167,10 @@ function formatKstDateTime(date = new Date()) {
 }
 
 function describeSchedule(schedule, stage) {
-  if (schedule === PRIMARY_SCHEDULE || stage === 'morning-retry-window') {
-    return '06:17~10:17 오전 자동 재시도';
+  if (schedule === PRIMARY_SCHEDULE || stage === 'safe-morning-window') {
+    return '06:07·06:17 접속 보호 시간대 자동 시도';
   }
-  if (schedule === FALLBACK_SCHEDULE || stage === 'final-recovery') return '12:13 최종 복구 실행';
-  if (stage === 'watchdog-dispatch') return '독립 감시 워크플로 복구 호출';
+  if (stage === 'safety-watchdog') return '06:50 성공 기록 확인(로그인 없음)';
   return schedule || '수동 실행';
 }
 
@@ -241,7 +238,7 @@ function buildFailureBody({
     '### 감지된 원인',
     details,
     '',
-    '오전 재시도 창의 일반적인 일시 오류는 다음 예약까지 기다립니다. 설정 오류와 구조 변경은 즉시 알리고, 12:13 최종 복구 실패도 이 이슈에 기록합니다. 이후 출석이 성공하면 자동으로 종료됩니다.'
+    '구조·설정 오류는 즉시 알립니다. 일반적인 일시 오류가 발생해도 접속 중인 게임 세션을 보호하기 위해 06:25 이후 자동 로그인은 수행하지 않습니다. 06:50 상태 확인이 미완료를 표시하면 게임에서 로그아웃한 뒤 수동 실행하세요.'
   ].join('\n');
 }
 

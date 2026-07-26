@@ -1,9 +1,9 @@
-name: Attendance Watchdog
-run-name: Attendance Watchdog · ${{ github.event_name }}
+name: Attendance Safety Check
+run-name: Attendance Safety Check · ${{ github.event_name }}
 
 on:
   schedule:
-    - cron: '31 11,13 * * *'
+    - cron: '50 6 * * *'
       timezone: 'Asia/Seoul'
   workflow_dispatch:
   pull_request:
@@ -12,7 +12,7 @@ on:
     paths:
       - '.github/workflows/attendance-watchdog.yml'
       - '.github/workflows/main.yml'
-      - 'scripts/dispatch-attendance-watchdog.js'
+      - 'scripts/check-attendance-watchdog.js'
       - 'src/attendance-schedule.js'
       - 'test/attendance-schedule.test.js'
 
@@ -38,21 +38,20 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Validate watchdog policy
+      - name: Validate safe attendance policy
         run: node --test test/attendance-schedule.test.js
 
-  dispatch:
+  check:
     if: >-
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     concurrency:
-      group: majsoul-attendance-watchdog
+      group: majsoul-attendance-safety-check
       cancel-in-progress: false
     permissions:
       contents: read
-      actions: write
 
     steps:
       - name: Checkout trusted main branch
@@ -67,7 +66,5 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Check success marker and dispatch recovery
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/dispatch-attendance-watchdog.js last-attendance-kst.txt
+      - name: Check success marker without logging in
+        run: node scripts/check-attendance-watchdog.js last-attendance-kst.txt

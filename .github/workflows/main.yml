@@ -4,16 +4,19 @@ run-name: >-
 
 on:
   schedule:
-    - cron: '17 6-10 * * *'
-      timezone: 'Asia/Seoul'
-    - cron: '13 12 * * *'
+    - cron: '7,17 6 * * *'
       timezone: 'Asia/Seoul'
   workflow_dispatch:
     inputs:
+      confirm_not_playing:
+        description: '현재 게임에 접속 중이 아니며 중복 로그인으로 기존 세션이 종료될 수 있음을 확인'
+        required: true
+        default: false
+        type: boolean
       force:
         description: '오늘 이미 성공했어도 다시 실행'
         required: false
-        default: true
+        default: false
         type: boolean
   push:
     branches:
@@ -143,8 +146,10 @@ jobs:
       contents: read
 
     steps:
-      - name: Verify manual run branch
+      - name: Verify manual run safety
         shell: bash
+        env:
+          SAFE_LOGIN_CONFIRMED: ${{ inputs.confirm_not_playing }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
@@ -159,7 +164,17 @@ jobs:
             } >> "${GITHUB_STEP_SUMMARY}"
             exit 1
           fi
-          echo '수동 실행 ref 확인: main' >> "${GITHUB_STEP_SUMMARY}"
+          if [[ "${SAFE_LOGIN_CONFIRMED}" != 'true' ]]; then
+            echo "::error title=현재 접속 상태를 확인하세요::자동화 로그인은 이미 접속 중인 게임 세션을 종료할 수 있습니다. 게임에서 로그아웃한 뒤 안전 확인 항목을 켜고 다시 실행하세요."
+            {
+              echo '## 수동 실행이 차단된 이유'
+              echo
+              echo '자동화 로그인은 이미 접속 중인 게임 세션을 종료할 수 있습니다.'
+              echo '게임에서 로그아웃한 상태를 확인하고 `현재 게임에 접속 중이 아님` 항목을 켠 뒤 다시 실행하세요.'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          echo '수동 실행 안전 확인 완료: main / 현재 게임 미접속 확인' >> "${GITHUB_STEP_SUMMARY}"
 
   attendance:
     needs: manual_ref_check
@@ -190,13 +205,14 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Decide whether attendance is needed
+      - name: Decide whether attendance is safe and needed
         id: decision
         shell: bash
         env:
           ATTENDANCE_SCHEDULE: ${{ github.event.schedule }}
           ATTENDANCE_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
-          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
+          ATTENDANCE_CONFIRM_SAFE_LOGIN: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_not_playing || false }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || 'manual' }}
         run: |
           set -euo pipefail
           marker="${RUNNER_TEMP}/last-attendance-kst.txt"
@@ -270,7 +286,7 @@ jobs:
           SHOULD_RUN: ${{ steps.decision.outputs.should_run }}
           DECISION_REASON: ${{ steps.decision.outputs.reason }}
           ATTENDANCE_STAGE: ${{ steps.decision.outputs.stage }}
-          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || 'manual' }}
           ATTENDANCE_TODAY: ${{ steps.decision.outputs.today }}
           LAST_SUCCESS: ${{ steps.decision.outputs.last_success }}
           PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
@@ -309,4 +325,4 @@ jobs:
           AUTOMATION_OUTCOME: ${{ steps.automation.outcome }}
           CACHE_OUTCOME: ${{ steps.cache.outcome }}
           ATTENDANCE_STAGE: ${{ steps.decision.outputs.stage }}
-          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || 'manual' }}
