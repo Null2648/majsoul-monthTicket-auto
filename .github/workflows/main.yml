@@ -4,8 +4,8 @@ run-name: >-
 
 on:
   schedule:
-    - cron: '7,17 6 * * *'
-      timezone: 'Asia/Seoul'
+    # 21:05 UTC = 06:05 KST. This is the repository's historically proven single schedule.
+    - cron: '5 21 * * *'
   workflow_dispatch:
     inputs:
       confirm_not_playing:
