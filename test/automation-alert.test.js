@@ -32,7 +32,7 @@ test('structural failures are classified for immediate notification', () => {
   );
 });
 
-test('primary transient failures wait for fallback, while structural failures notify immediately', () => {
+test('morning transient failures wait for later retries, while structural failures notify immediately', () => {
   assert.equal(
     shouldNotifyFailure({
       eventName: 'schedule',
@@ -93,7 +93,7 @@ test('failure reports redact configured credentials and email addresses', () => 
   assert.match(serialized, /REDACTED/);
 });
 
-test('issue body contains actionable status without raw secrets', () => {
+test('issue body contains actionable final recovery status without raw secrets', () => {
   const body = buildFailureBody({
     classification: 'protocol-breaking',
     summary: sanitizeText('token=secret-value protocol changed', {
@@ -102,6 +102,7 @@ test('issue body contains actionable status without raw secrets', () => {
     protocolBreaking: ['Protocol method lq.Lobby.payMonthTicket is missing'],
     eventName: 'schedule',
     schedule: FALLBACK_SCHEDULE,
+    stage: 'final-recovery',
     runUrl: 'https://github.com/example/repo/actions/runs/1',
     sha: '1234567890abcdef',
     lastSuccess: '2026-07-25',
@@ -110,10 +111,10 @@ test('issue body contains actionable status without raw secrets', () => {
       automation: 'failure',
       cache: 'skipped'
     },
-    occurredAt: new Date('2026-07-25T21:47:00.000Z')
+    occurredAt: new Date('2026-07-26T03:13:00.000Z')
   });
 
-  assert.match(body, /06:47 재시도/);
+  assert.match(body, /12:13 최종 복구 실행/);
   assert.match(body, /payMonthTicket/);
   assert.match(body, /GitHub Actions 실행 열기/);
   assert.doesNotMatch(body, /secret-value/);
