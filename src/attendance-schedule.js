@@ -1,7 +1,9 @@
 const fs = require('node:fs');
 
 const TIME_ZONE = 'Asia/Seoul';
-const AUTOMATIC_LOGIN_SCHEDULE = '7,17 6 * * *';
+// 21:05 UTC is 06:05 KST on the following calendar day. Korea has no DST.
+// This exact single cron is the historically proven schedule for this repository.
+const AUTOMATIC_LOGIN_SCHEDULE = '5 21 * * *';
 const MORNING_RETRY_SCHEDULE = AUTOMATIC_LOGIN_SCHEDULE;
 const WATCHDOG_SCHEDULE = '50 6 * * *';
 const SAFE_LOGIN_WINDOW_START_MINUTES = 6 * 60;

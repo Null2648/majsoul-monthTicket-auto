@@ -104,7 +104,7 @@ test('scheduled gateway authentication is rechecked at connection time and bound
   );
 
   resetGatewayAttemptBudget();
-  const now = Date.parse('2026-07-25T21:07:00.000Z');
+  const now = Date.parse('2026-07-25T21:05:00.000Z');
   for (let index = 0; index < MAX_GATEWAY_CONNECTION_ATTEMPTS; index += 1) {
     consumeGatewayAttempt({ now: now + index, env: scheduleEnv });
   }
@@ -153,11 +153,15 @@ test('protocol safety failures are fail-closed and non-retryable', () => {
   assert.equal(wrapProtocolSafetyError(breaking), breaking);
 });
 
-test('manual and scheduled startup paths verify without performing a game login', () => {
+test('manual and single scheduled startup paths verify without performing a game login', () => {
   const report = verifyStartupPaths();
   assert.equal(report.noLoginPerformed, true);
-  assert.equal(report.cases.scheduled0607.shouldRun, true);
+  assert.equal(report.automaticSchedule.cron, '5 21 * * *');
+  assert.equal(report.automaticSchedule.kst, '06:05');
+  assert.equal(report.automaticSchedule.attemptsPerDay, 1);
+  assert.equal(report.cases.scheduled0605.shouldRun, true);
   assert.equal(report.cases.delayed0625.shouldRun, false);
+  assert.equal(report.cases.rejectedFormerMultiSchedule.shouldRun, false);
   assert.equal(report.cases.manualConfirmed.shouldRun, true);
   assert.equal(report.cases.manualUnconfirmed.shouldRun, false);
 });
