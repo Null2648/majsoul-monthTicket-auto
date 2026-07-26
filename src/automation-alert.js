@@ -14,6 +14,7 @@ const INCIDENT_TITLE = '[자동 출석 장애] 점검 필요';
 const PRIMARY_SCHEDULE = MORNING_RETRY_SCHEDULE;
 const FALLBACK_SCHEDULE = FINAL_RECOVERY_SCHEDULE;
 const IMMEDIATE_CLASSIFICATIONS = new Set([
+  'configuration',
   'protocol-breaking',
   'official-metadata',
   'client-metadata',
@@ -22,6 +23,12 @@ const IMMEDIATE_CLASSIFICATIONS = new Set([
 
 function uniqueSecretValues(env = process.env) {
   return [...new Set([
+    env.MAJSOUL_TOKEN,
+    env.MAJSOUL_ACCESS_TOKEN,
+    env.MAJSOUL_YOSTAR_DEVICE_ID,
+    env.MAJSOUL_PASSWORD,
+    env.MAJSOUL_EMAIL,
+    env.MAJSOUL_UID,
     env.TOKEN,
     env.ACCESS_TOKEN,
     env.YOSTAR_DEVICE_ID,
@@ -63,6 +70,12 @@ function classifyAutomationError(error) {
   const code = String(error?.code || '').toUpperCase();
   const message = `${error?.name || ''} ${error?.message || error || ''}`;
 
+  if (
+    code === 'ATTENDANCE_CONFIGURATION' ||
+    /MS_SERVER must|repository Secret|UID and TOKEN must|Set ACCESS_TOKEN|Set both EMAIL and PASSWORD|attendance configuration/i.test(message)
+  ) {
+    return 'configuration';
+  }
   if (code === 'PROTOCOL_BREAKING_CHANGE' || /breaking protocol|protocol field|protocol method/i.test(message)) {
     return 'protocol-breaking';
   }
@@ -154,7 +167,7 @@ function formatKstDateTime(date = new Date()) {
 
 function describeSchedule(schedule, stage) {
   if (schedule === PRIMARY_SCHEDULE || stage === 'morning-retry-window') {
-    return '06:07~10:52 오전 자동 재시도';
+    return '06:17~10:17 오전 자동 재시도';
   }
   if (schedule === FALLBACK_SCHEDULE || stage === 'final-recovery') return '12:13 최종 복구 실행';
   if (stage === 'watchdog-dispatch') return '독립 감시 워크플로 복구 호출';
@@ -174,12 +187,14 @@ function normalizeOutcome(value) {
 
 function buildStepTable(outcomes = {}) {
   const rows = [
+    ['설정 사전검사', outcomes.preflight],
+    ['런타임 의존성 설치', outcomes.install],
     ['테스트', outcomes.tests],
     ['JP 클라이언트 검사', outcomes.jp],
     ['YoStar SDK 검사', outcomes.yostar],
     ['프로토콜 검사', outcomes.protocol],
     ['자동 출석', outcomes.automation],
-    ['캐시 저장', outcomes.cache]
+    ['성공 상태 저장', outcomes.cache]
   ];
 
   return [
@@ -223,7 +238,7 @@ function buildFailureBody({
     '### 감지된 원인',
     details,
     '',
-    '오전 재시도 창의 일반적인 일시 오류는 다음 예약까지 기다립니다. 구조 변경은 즉시 알리고, 12:13 최종 복구 실패도 이 이슈에 기록합니다. 이후 출석이 성공하면 자동으로 종료됩니다.'
+    '오전 재시도 창의 일반적인 일시 오류는 다음 예약까지 기다립니다. 설정 오류와 구조 변경은 즉시 알리고, 12:13 최종 복구 실패도 이 이슈에 기록합니다. 이후 출석이 성공하면 자동으로 종료됩니다.'
   ].join('\n');
 }
 
