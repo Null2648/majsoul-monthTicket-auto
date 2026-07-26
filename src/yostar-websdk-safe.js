@@ -7,9 +7,14 @@ const {
   isUnsafeNetworkHostname
 } = require('./network-hardening');
 
+const TRUSTED_CREDENTIAL_SUFFIXES = [
+  ...hardened.TRUSTED_STRUCTURAL_SUFFIXES,
+  'yostarplat.com'
+];
+
 function isTrustedCredentialDomain(hostname) {
   const host = String(hostname || '').toLowerCase();
-  return hardened.TRUSTED_STRUCTURAL_SUFFIXES.some(
+  return TRUSTED_CREDENTIAL_SUFFIXES.some(
     suffix => host === suffix || host.endsWith(`.${suffix}`)
   );
 }
@@ -144,6 +149,7 @@ async function refreshYostarCredentials(options) {
 module.exports = {
   ...base,
   ...hardened,
+  TRUSTED_CREDENTIAL_SUFFIXES,
   hardenWebSdkMetadataCandidates,
   isTrustedCredentialDomain,
   loadOfficialWebSdkMetadata,
