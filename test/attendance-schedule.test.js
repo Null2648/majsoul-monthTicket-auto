@@ -3,119 +3,130 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const {
-  FINAL_RECOVERY_SCHEDULE,
-  MORNING_RETRY_SCHEDULE,
+  AUTOMATIC_LOGIN_SCHEDULE,
   WATCHDOG_SCHEDULE,
   decideAttendanceRun,
-  dispatchStage,
   formatKstDate,
+  isWithinAutomaticLoginWindow,
   scheduleStage
 } = require('../src/attendance-schedule');
 const {
-  dispatchAttendance,
-  splitRepository
-} = require('../scripts/dispatch-attendance-watchdog');
+  buildMissingSummary,
+  checkAttendanceStatus
+} = require('../scripts/check-attendance-watchdog');
 
 const repoPath = (...parts) => path.join(process.cwd(), ...parts);
 
-test('KST date calculation is independent from runner timezone', () => {
+test('KST date and safe-window calculation are independent from runner timezone', () => {
   assert.equal(formatKstDate(new Date('2026-07-25T14:59:59.000Z')), '2026-07-25');
   assert.equal(formatKstDate(new Date('2026-07-25T15:00:00.000Z')), '2026-07-26');
+  assert.equal(isWithinAutomaticLoginWindow(new Date('2026-07-25T21:00:00.000Z')), true);
+  assert.equal(isWithinAutomaticLoginWindow(new Date('2026-07-25T21:24:59.000Z')), true);
+  assert.equal(isWithinAutomaticLoginWindow(new Date('2026-07-25T21:25:00.000Z')), false);
+  assert.equal(isWithinAutomaticLoginWindow(new Date('2026-07-25T22:00:00.000Z')), false);
 });
 
-test('successful attendance marker suppresses every non-forced retry', () => {
-  const now = new Date('2026-07-25T22:10:00.000Z');
-  for (const schedule of [MORNING_RETRY_SCHEDULE, FINAL_RECOVERY_SCHEDULE, WATCHDOG_SCHEDULE]) {
-    const decision = decideAttendanceRun({
-      eventName: 'schedule',
-      schedule,
-      lastSuccess: '2026-07-26\n',
-      now
-    });
-    assert.equal(decision.shouldRun, false);
-    assert.equal(decision.reason, 'already-completed');
-  }
-  const watchdogDispatch = decideAttendanceRun({
-    eventName: 'workflow_dispatch',
-    source: 'watchdog',
-    lastSuccess: '2026-07-26',
-    now,
-    force: false
-  });
-  assert.equal(watchdogDispatch.shouldRun, false);
-  assert.equal(watchdogDispatch.stage, 'watchdog-dispatch');
-});
-
-test('stale markers retry while manual force always runs', () => {
-  const now = new Date('2026-07-25T22:10:00.000Z');
-  const scheduled = decideAttendanceRun({
+test('scheduled login runs only inside the protected 06:00-06:25 KST window', () => {
+  const safe = decideAttendanceRun({
     eventName: 'schedule',
-    schedule: MORNING_RETRY_SCHEDULE,
+    schedule: AUTOMATIC_LOGIN_SCHEDULE,
     lastSuccess: '2026-07-25',
-    now
+    now: new Date('2026-07-25T21:17:00.000Z')
   });
-  assert.equal(scheduled.shouldRun, true);
-  assert.equal(scheduled.stage, 'morning-retry-window');
+  assert.equal(safe.shouldRun, true);
+  assert.equal(safe.stage, 'safe-morning-window');
 
-  const manual = decideAttendanceRun({
+  const delayed = decideAttendanceRun({
+    eventName: 'schedule',
+    schedule: AUTOMATIC_LOGIN_SCHEDULE,
+    lastSuccess: '2026-07-25',
+    now: new Date('2026-07-25T21:25:00.000Z')
+  });
+  assert.equal(delayed.shouldRun, false);
+  assert.equal(delayed.reason, 'outside-safe-login-window');
+
+  const unsupported = decideAttendanceRun({
+    eventName: 'schedule',
+    schedule: '13 12 * * *',
+    lastSuccess: '2026-07-25',
+    now: new Date('2026-07-26T03:13:00.000Z')
+  });
+  assert.equal(unsupported.shouldRun, false);
+  assert.equal(unsupported.reason, 'unsupported-schedule');
+});
+
+test('successful marker suppresses retries before any login work begins', () => {
+  const decision = decideAttendanceRun({
+    eventName: 'schedule',
+    schedule: AUTOMATIC_LOGIN_SCHEDULE,
+    lastSuccess: '2026-07-26\n',
+    now: new Date('2026-07-25T21:17:00.000Z')
+  });
+  assert.equal(decision.shouldRun, false);
+  assert.equal(decision.reason, 'already-completed');
+});
+
+test('manual login requires explicit confirmation that the game is not active', () => {
+  const blocked = decideAttendanceRun({
+    eventName: 'workflow_dispatch',
+    source: 'manual',
+    lastSuccess: '2026-07-25',
+    now: new Date('2026-07-25T23:00:00.000Z'),
+    force: true,
+    confirmSafeLogin: false
+  });
+  assert.equal(blocked.shouldRun, false);
+  assert.equal(blocked.reason, 'manual-safety-confirmation-required');
+
+  const confirmed = decideAttendanceRun({
     eventName: 'workflow_dispatch',
     source: 'manual',
     lastSuccess: '2026-07-26',
-    now,
-    force: true
+    now: new Date('2026-07-25T23:00:00.000Z'),
+    force: true,
+    confirmSafeLogin: true
   });
-  assert.equal(manual.shouldRun, true);
-  assert.equal(manual.reason, 'manual-force');
-  assert.equal(manual.stage, 'manual');
+  assert.equal(confirmed.shouldRun, true);
+  assert.equal(confirmed.reason, 'manual-force-confirmed');
+  assert.equal(confirmed.stage, 'manual');
 });
 
-test('schedule and dispatch stages describe recovery paths accurately', () => {
-  assert.equal(scheduleStage(MORNING_RETRY_SCHEDULE), 'morning-retry-window');
-  assert.equal(scheduleStage(FINAL_RECOVERY_SCHEDULE), 'final-recovery');
-  assert.equal(scheduleStage(WATCHDOG_SCHEDULE), 'watchdog');
-  assert.equal(dispatchStage('watchdog'), 'watchdog-dispatch');
-  assert.equal(dispatchStage('manual'), 'manual');
+test('watchdog only checks the marker and explains why it will not log in late', () => {
+  const completed = checkAttendanceStatus({
+    lastSuccess: '2026-07-26',
+    now: new Date('2026-07-25T21:50:00.000Z')
+  });
+  assert.equal(completed.completed, true);
+
+  const missing = checkAttendanceStatus({
+    lastSuccess: '2026-07-25',
+    now: new Date('2026-07-25T21:50:00.000Z')
+  });
+  assert.equal(missing.completed, false);
+  assert.match(buildMissingSummary(missing), /06:25 KST 이후에는 자동 로그인을 다시 시도하지 않습니다/);
+  assert.match(buildMissingSummary(missing), /게임에서 로그아웃한 상태/);
+  assert.equal(scheduleStage(WATCHDOG_SCHEDULE), 'safety-watchdog');
 });
 
-test('watchdog dispatches trusted main with only a deduplicating force input', async () => {
-  let request;
-  const status = await dispatchAttendance({
-    repository: 'Null2648/majsoul-monthTicket-auto',
-    token: 'test-token',
-    fetchImpl: async (url, init) => {
-      request = { url, init };
-      return new Response(null, { status: 204 });
-    }
-  });
-  assert.equal(status, 204);
-  assert.match(request.url, /actions\/workflows\/main\.yml\/dispatches$/);
-  assert.equal(request.init.method, 'POST');
-  assert.equal(request.init.headers.Authorization, 'Bearer test-token');
-  assert.equal(request.init.headers['X-GitHub-Api-Version'], '2022-11-28');
-  assert.deepEqual(JSON.parse(request.init.body), {
-    ref: 'main',
-    inputs: { force: 'false' }
-  });
-  assert.deepEqual(splitRepository('owner/repo'), { owner: 'owner', repo: 'repo' });
-  assert.throws(() => splitRepository('invalid'), /Invalid GITHUB_REPOSITORY/);
-});
-
-test('workflow definitions expose wrong-ref manual failures and keep runtime lean', () => {
+test('workflow definitions contain no automatic login after the safe morning window', () => {
   const main = fs.readFileSync(repoPath('.github', 'workflows', 'main.yml'), 'utf8');
   const watchdog = fs.readFileSync(repoPath('.github', 'workflows', 'attendance-watchdog.yml'), 'utf8');
-  assert.match(main, /cron: '17 6-10 \* \* \*'/);
-  assert.match(main, /cron: '13 12 \* \* \*'/);
-  assert.match(main, /manual_ref_check:/);
-  assert.match(main, /main 브랜치를 선택하세요/);
-  assert.match(main, /needs\.manual_ref_check\.result == 'success'/);
+  assert.match(main, /cron: '7,17 6 \* \* \*'/);
+  assert.doesNotMatch(main, /6-10 \* \* \*/);
+  assert.doesNotMatch(main, /13 12 \* \* \*/);
+  assert.match(main, /confirm_not_playing:/);
+  assert.match(main, /현재 접속 상태를 확인하세요/);
+  assert.match(main, /ATTENDANCE_CONFIRM_SAFE_LOGIN/);
   assert.match(main, /npm ci --omit=dev --ignore-scripts/);
   const attendance = main.split(/\n  attendance:\n/)[1] || '';
   assert.doesNotMatch(attendance, /run: npm test/);
   assert.match(attendance, /node scripts\/preflight-attendance\.js/);
-  assert.match(attendance, /node scripts\/write-attendance-run-report\.js/);
   assert.match(attendance, /git push origin HEAD:main/);
-  assert.match(watchdog, /cron: '31 11,13 \* \* \*'/);
-  assert.match(watchdog, /actions: write/);
-  assert.match(watchdog, /ref: main/);
-  assert.match(watchdog, /persist-credentials: false/);
+
+  assert.match(watchdog, /cron: '50 6 \* \* \*'/);
+  assert.match(watchdog, /Check success marker without logging in/);
+  assert.match(watchdog, /node scripts\/check-attendance-watchdog\.js/);
+  assert.doesNotMatch(watchdog, /actions: write/);
+  assert.doesNotMatch(watchdog, /dispatch-attendance-watchdog/);
+  assert.equal(fs.existsSync(repoPath('scripts', 'dispatch-attendance-watchdog.js')), false);
 });
