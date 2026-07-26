@@ -7,6 +7,10 @@ const {
 
 const WEBSDK_CONFIG_PATH = 'StreamingAssets/WebGL/YoStarSDK/config.json';
 const WEBSDK_SCRIPT_PATH = 'StreamingAssets/WebGL/YoStarSDK/index.js.txt';
+const MAX_OFFICIAL_CANDIDATES = 4;
+const MAX_HOSTS_PER_CANDIDATE = 2;
+const QUICK_LOGIN_TIMEOUT_MS = 8000;
+const REFRESH_BUDGET_MS = 60000;
 const TRUSTED_STRUCTURAL_SUFFIXES = [
   'yostar.net',
   'yo-star.com',
@@ -46,23 +50,44 @@ function normalizeCredentialHost(value, { strictOfficial = false } = {}) {
   }
 }
 
-function hardenWebSdkMetadataCandidates(candidates = []) {
+function candidateKey(candidate) {
+  return [
+    String(candidate?.pid || ''),
+    String(candidate?.version || ''),
+    String(candidate?.signingSecret || ''),
+    (candidate?.hosts || []).join(',')
+  ].join('\u0000');
+}
+
+function strategyRank(strategy) {
+  const value = String(strategy || '');
+  if (value.includes('strict-config+strict-regex')) return 0;
+  if (value.includes('strict-config+partial-ast')) return 1;
+  if (value.includes('structural-config+strict-regex')) return 2;
+  if (value.includes('structural-config+partial-ast')) return 3;
+  return 4;
+}
+
+function hardenWebSdkMetadataCandidates(candidates = [], { limit = Infinity } = {}) {
   const result = [];
   const seen = new Set();
-  for (const candidate of candidates) {
+  const sorted = [...candidates].sort((a, b) => strategyRank(a?.strategy) - strategyRank(b?.strategy));
+  for (const candidate of sorted) {
     const strategy = String(candidate?.strategy || '');
     const strictOfficial = strategy.includes('strict-config');
     const hosts = [...new Set(
       (candidate?.hosts || [])
         .map(host => normalizeCredentialHost(host, { strictOfficial }))
         .filter(Boolean)
-    )];
+    )].slice(0, MAX_HOSTS_PER_CANDIDATE);
     const pid = String(candidate?.pid || '').trim();
     if (!hosts.length || !pid || !candidate?.version || !candidate?.signingSecret) continue;
-    const key = `${pid}\u0000${candidate.version}\u0000${candidate.signingSecret}\u0000${hosts.join(',')}`;
+    const normalized = { ...candidate, pid, hosts };
+    const key = candidateKey(normalized);
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push({ ...candidate, hosts });
+    result.push(normalized);
+    if (result.length >= limit) break;
   }
   return result;
 }
@@ -90,7 +115,8 @@ async function loadOfficialWebSdkMetadataCandidates(gameBase) {
   const configCandidates = parseJpSdkConfigCandidates(config);
   const runtimeCandidates = parseWebSdkRuntimeCandidates(script);
   const candidates = hardenWebSdkMetadataCandidates(
-    mergeWebSdkMetadataCandidates({ configCandidates, runtimeCandidates })
+    mergeWebSdkMetadataCandidates({ configCandidates, runtimeCandidates }),
+    { limit: MAX_OFFICIAL_CANDIDATES }
   );
   if (!candidates.length) {
     throw new Error(
@@ -110,45 +136,134 @@ async function loadOfficialWebSdkMetadata(gameBase) {
   return (await loadOfficialWebSdkMetadataCandidates(gameBase))[0];
 }
 
-async function tryCandidate(options, candidate) {
-  return original.refreshYostarCredentials({ ...options, metadata: candidate });
+function remainingTimeout(deadlineAt) {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) {
+    const error = new Error('YoStar WebSDK credential refresh exceeded its total time budget');
+    error.code = 'YOSTAR_REFRESH_TIMEOUT';
+    throw error;
+  }
+  return Math.max(1, Math.min(QUICK_LOGIN_TIMEOUT_MS, remaining));
+}
+
+async function tryCandidate(options, candidate, deadlineAt) {
+  const resolvedDeviceId = options.deviceId || original.createStableDeviceId(options.uid, options.token);
+  const errors = [];
+  for (const host of candidate.hosts.slice(0, MAX_HOSTS_PER_CANDIDATE)) {
+    const authorization = original.buildAuthorization({
+      uid: options.uid,
+      token: options.token,
+      deviceId: resolvedDeviceId,
+      pid: candidate.pid,
+      sdkVersion: candidate.version,
+      signingSecret: candidate.signingSecret,
+      unixTime: Math.floor(Date.now() / 1000)
+    });
+    try {
+      const response = await fetch(buildUrl(host, 'user/quick-login'), {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: JSON.stringify(authorization),
+          'Content-Type': 'application/json',
+          Origin: 'https://game.mahjongsoul.com',
+          Referer: 'https://game.mahjongsoul.com/',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(remainingTimeout(deadlineAt))
+      });
+      const text = await response.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error(`YoStar WebSDK returned non-JSON HTTP ${response.status}`);
+      }
+      const result = original.extractQuickLoginResult(json);
+      if (result.uid !== String(options.uid)) {
+        throw new Error('YoStar WebSDK quick login returned a different account UID');
+      }
+      return {
+        uid: String(options.uid),
+        token: String(options.token),
+        responseUid: result.uid,
+        responseToken: result.token,
+        deviceId: resolvedDeviceId,
+        metadata: candidate
+      };
+    } catch (error) {
+      if (error?.yostarCode === 100403) throw error;
+      errors.push(`${new URL(host).host}: ${error?.message || error}`);
+    }
+  }
+  throw new Error(
+    `YoStar WebSDK candidate failed (${candidate.version}:${candidate.strategy}): ${errors.join('; ')}`
+  );
 }
 
 async function refreshYostarCredentials(options) {
-  const cachedCandidates = hardenWebSdkMetadataCandidates(
-    mergeWebSdkMetadataCandidates({ cachedMetadata: options.metadata })
-  );
+  const deadlineAt = Date.now() + REFRESH_BUDGET_MS;
+  const attempted = new Set();
   let lastError;
 
-  for (const candidate of cachedCandidates) {
-    try {
-      return await tryCandidate(options, candidate);
-    } catch (error) {
-      if (error?.yostarCode === 100403) throw error;
-      lastError = error;
+  const cachedCandidates = hardenWebSdkMetadataCandidates(
+    mergeWebSdkMetadataCandidates({ cachedMetadata: options.metadata }),
+    { limit: 1 }
+  );
+  const attemptCandidates = async candidates => {
+    for (const candidate of candidates) {
+      const key = candidateKey(candidate);
+      if (attempted.has(key)) continue;
+      attempted.add(key);
+      if (Date.now() >= deadlineAt) return null;
+      console.log(
+        `trying YoStar WebSDK metadata -> version=${candidate.version} ` +
+        `strategy=${candidate.strategy} routes=${candidate.hosts.length}`
+      );
+      try {
+        return await tryCandidate(options, candidate, deadlineAt);
+      } catch (error) {
+        if (error?.yostarCode === 100403) throw error;
+        lastError = error;
+      }
     }
-  }
+    return null;
+  };
+
+  const cachedResult = await attemptCandidates(cachedCandidates);
+  if (cachedResult) return cachedResult;
 
   const officialCandidates = await loadOfficialWebSdkMetadataCandidates(options.gameBase);
-  for (const candidate of officialCandidates) {
-    try {
-      return await tryCandidate(options, candidate);
-    } catch (error) {
-      if (error?.yostarCode === 100403) throw error;
-      lastError = error;
-    }
-  }
+  const officialResult = await attemptCandidates(officialCandidates);
+  if (officialResult) return officialResult;
 
-  throw lastError || new Error('All trusted YoStar WebSDK metadata candidates failed');
+  if (Date.now() >= deadlineAt) {
+    const timeout = new Error(
+      `YoStar WebSDK credential refresh exceeded ${REFRESH_BUDGET_MS / 1000}s after ${attempted.size} candidates`
+    );
+    timeout.code = 'YOSTAR_REFRESH_TIMEOUT';
+    throw timeout;
+  }
+  throw lastError || new Error('All bounded YoStar WebSDK metadata candidates failed');
 }
 
 module.exports = {
   ...original,
+  MAX_HOSTS_PER_CANDIDATE,
+  MAX_OFFICIAL_CANDIDATES,
+  QUICK_LOGIN_TIMEOUT_MS,
+  REFRESH_BUDGET_MS,
   TRUSTED_STRUCTURAL_SUFFIXES,
+  candidateKey,
   hardenWebSdkMetadataCandidates,
   isPrivateHostname,
   loadOfficialWebSdkMetadata,
   loadOfficialWebSdkMetadataCandidates,
   normalizeCredentialHost,
-  refreshYostarCredentials
+  refreshYostarCredentials,
+  strategyRank,
+  tryCandidate
 };
