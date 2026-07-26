@@ -6,6 +6,9 @@ const {
 const {
   prepareOfficialStructureFallbacks
 } = require('../src/official-structure-fallbacks');
+const {
+  validateGatewayEndpoint
+} = require('../src/websocket-hardening');
 
 const DIAGNOSTIC_PATH = 'jp-metadata-diagnostic.json';
 
@@ -90,6 +93,7 @@ async function check() {
         `Official Unity build mismatch: structure=${structure.buildId}, context=${context.buildId}`
       );
     }
+    for (const route of context.routes) validateGatewayEndpoint(route.endpoint);
 
     if (fs.existsSync(DIAGNOSTIC_PATH)) fs.unlinkSync(DIAGNOSTIC_PATH);
     console.log(
@@ -97,7 +101,7 @@ async function check() {
       `build=${context.buildId}, resource=${context.version}, ` +
       `exact=${discovery.strings.join(', ')}, candidate=${context.clientVersionStringCandidates[0]}, ` +
       `config_paths=${structure.configUrls.length}, manifest_paths=${structure.manifestUrls.length}, ` +
-      `liqi_paths=${structure.liqiUrls.length}, routes=${context.routes.length}`
+      `liqi_paths=${structure.liqiUrls.length}, safe_routes=${context.routes.length}`
     );
   } catch (error) {
     error.jpStructureDiagnostic = {

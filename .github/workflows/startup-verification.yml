@@ -1,0 +1,95 @@
+name: Verify Attendance Startup (No Login)
+run-name: Verify Attendance Startup · ${{ github.event_name }} · ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/main.yml'
+      - '.github/workflows/attendance-watchdog.yml'
+      - '.github/workflows/startup-verification.yml'
+      - 'scripts/check-yostar-websdk.js'
+      - 'scripts/verify-startup-paths.js'
+      - 'src/attendance-schedule.js'
+      - 'src/bootstrap.js'
+      - 'src/network-hardening.js'
+      - 'src/websocket-hardening.js'
+      - 'src/auth-cache-hardening.js'
+      - 'src/yostar-websdk-safe.js'
+      - 'test/full-review-hardening.test.js'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/main.yml'
+      - '.github/workflows/attendance-watchdog.yml'
+      - '.github/workflows/startup-verification.yml'
+      - 'scripts/check-yostar-websdk.js'
+      - 'scripts/verify-startup-paths.js'
+      - 'src/attendance-schedule.js'
+      - 'src/bootstrap.js'
+      - 'src/network-hardening.js'
+      - 'src/websocket-hardening.js'
+      - 'src/auth-cache-hardening.js'
+      - 'src/yostar-websdk-safe.js'
+      - 'test/full-review-hardening.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: attendance-startup-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted repository code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Verify manual and scheduled startup decisions
+        run: node scripts/verify-startup-paths.js
+
+      - name: Run runtime hardening tests
+        run: node --test test/full-review-hardening.test.js test/attendance-schedule.test.js
+
+      - name: Check current JP client metadata
+        run: npm run check:jp
+
+      - name: Check current YoStar WebSDK metadata
+        run: npm run check:yostar
+
+      - name: Check current protocol baseline
+        run: npm run check:protocol
+
+      - name: Upload startup verification report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: attendance-startup-verification-${{ github.run_id }}
+          path: |
+            startup-verification-report.json
+            yostar-safe-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 14

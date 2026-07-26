@@ -5,5 +5,10 @@ protocol.md
 protocol-change-report.json
 automation-failure-report.json
 attendance-run-report.json
+startup-verification-report.json
+jp-metadata-diagnostic.json
+yostar-safe-diagnostic.json
+npm-audit.json
+npm-test.log
 
 *.har
