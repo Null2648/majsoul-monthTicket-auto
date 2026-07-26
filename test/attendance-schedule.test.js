@@ -67,16 +67,6 @@ test('stale markers retry while manual force always runs', () => {
   assert.equal(manual.shouldRun, true);
   assert.equal(manual.reason, 'manual-force');
   assert.equal(manual.stage, 'manual');
-
-  const manualNonForce = decideAttendanceRun({
-    eventName: 'workflow_dispatch',
-    source: 'manual',
-    lastSuccess: '2026-07-25',
-    now,
-    force: false
-  });
-  assert.equal(manualNonForce.shouldRun, true);
-  assert.equal(manualNonForce.stage, 'manual');
 });
 
 test('schedule and dispatch stages describe recovery paths accurately', () => {
@@ -87,12 +77,11 @@ test('schedule and dispatch stages describe recovery paths accurately', () => {
   assert.equal(dispatchStage('manual'), 'manual');
 });
 
-test('watchdog dispatches main workflow with a deduplicating non-force input', async () => {
+test('watchdog dispatches trusted main with only a deduplicating force input', async () => {
   let request;
   const status = await dispatchAttendance({
     repository: 'Null2648/majsoul-monthTicket-auto',
     token: 'test-token',
-    ref: 'main',
     fetchImpl: async (url, init) => {
       request = { url, init };
       return new Response(null, { status: 204 });
@@ -105,24 +94,27 @@ test('watchdog dispatches main workflow with a deduplicating non-force input', a
   assert.equal(request.init.headers['X-GitHub-Api-Version'], '2022-11-28');
   assert.deepEqual(JSON.parse(request.init.body), {
     ref: 'main',
-    inputs: { force: 'false', source: 'watchdog' }
+    inputs: { force: 'false' }
   });
   assert.deepEqual(splitRepository('owner/repo'), { owner: 'owner', repo: 'repo' });
   assert.throws(() => splitRepository('invalid'), /Invalid GITHUB_REPOSITORY/);
 });
 
-test('workflow definitions keep validation read-only and recovery independently scheduled', () => {
+test('workflow definitions expose wrong-ref manual failures and keep runtime lean', () => {
   const main = fs.readFileSync(repoPath('.github', 'workflows', 'main.yml'), 'utf8');
   const watchdog = fs.readFileSync(repoPath('.github', 'workflows', 'attendance-watchdog.yml'), 'utf8');
-  assert.match(main, /cron: '7,22,37,52 6-10 \* \* \*'/);
+  assert.match(main, /cron: '17 6-10 \* \* \*'/);
   assert.match(main, /cron: '13 12 \* \* \*'/);
-  assert.match(main, /group: majsoul-attendance\n\s+cancel-in-progress: false/);
-  assert.match(main, /ATTENDANCE_FORCE: \$\{\{ inputs\.force \}\}/);
-  assert.match(main, /ATTENDANCE_SOURCE: \$\{\{ inputs\.source \}\}/);
-  assert.match(main, /attendance:\n\s+if: >-[\s\S]*?github\.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(main, /cron: '17 6 \* \* \*'/);
-  assert.match(watchdog, /cron: '31 11-14 \* \* \*'/);
-  assert.match(watchdog, /dispatch:\n\s+if: >-[\s\S]*?github\.ref == 'refs\/heads\/main'/);
+  assert.match(main, /manual_ref_check:/);
+  assert.match(main, /main 브랜치를 선택하세요/);
+  assert.match(main, /needs\.manual_ref_check\.result == 'success'/);
+  assert.match(main, /npm ci --omit=dev --ignore-scripts/);
+  const attendance = main.split(/\n  attendance:\n/)[1] || '';
+  assert.doesNotMatch(attendance, /run: npm test/);
+  assert.match(attendance, /node scripts\/preflight-attendance\.js/);
+  assert.match(attendance, /node scripts\/write-attendance-run-report\.js/);
+  assert.match(attendance, /git push origin HEAD:main/);
+  assert.match(watchdog, /cron: '31 11,13 \* \* \*'/);
   assert.match(watchdog, /actions: write/);
   assert.match(watchdog, /ref: main/);
   assert.match(watchdog, /persist-credentials: false/);
