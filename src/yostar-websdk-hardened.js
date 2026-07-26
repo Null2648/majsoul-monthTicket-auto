@@ -1,3 +1,4 @@
+const { createHash } = require('node:crypto');
 const original = require('./yostar-websdk');
 const {
   mergeWebSdkMetadataCandidates,
@@ -11,6 +12,8 @@ const MAX_OFFICIAL_CANDIDATES = 4;
 const MAX_HOSTS_PER_CANDIDATE = 2;
 const QUICK_LOGIN_TIMEOUT_MS = 8000;
 const REFRESH_BUDGET_MS = 60000;
+const RECENT_FAILURE_TTL_MS = 120000;
+const recentRefreshFailures = new Map();
 const TRUSTED_STRUCTURAL_SUFFIXES = [
   'yostar.net',
   'yo-star.com',
@@ -136,6 +139,36 @@ async function loadOfficialWebSdkMetadata(gameBase) {
   return (await loadOfficialWebSdkMetadataCandidates(gameBase))[0];
 }
 
+function refreshAttemptKey(options = {}) {
+  return createHash('sha256')
+    .update([
+      String(options.gameBase || ''),
+      String(options.uid || ''),
+      String(options.token || ''),
+      String(options.deviceId || '')
+    ].join('\u0000'))
+    .digest('hex');
+}
+
+function getRecentRefreshFailure(key, now = Date.now()) {
+  const saved = recentRefreshFailures.get(key);
+  if (!saved) return null;
+  if (saved.expiresAt <= now) {
+    recentRefreshFailures.delete(key);
+    return null;
+  }
+  return saved.error;
+}
+
+function rememberRefreshFailure(key, error, now = Date.now()) {
+  error.officialMetadataAttempted = true;
+  recentRefreshFailures.set(key, {
+    error,
+    expiresAt: now + RECENT_FAILURE_TTL_MS
+  });
+  return error;
+}
+
 function remainingTimeout(deadlineAt) {
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) {
@@ -205,6 +238,10 @@ async function tryCandidate(options, candidate, deadlineAt) {
 }
 
 async function refreshYostarCredentials(options) {
+  const refreshKey = refreshAttemptKey(options);
+  const recentFailure = getRecentRefreshFailure(refreshKey);
+  if (recentFailure) throw recentFailure;
+
   const deadlineAt = Date.now() + REFRESH_BUDGET_MS;
   const attempted = new Set();
   let lastError;
@@ -234,20 +271,34 @@ async function refreshYostarCredentials(options) {
   };
 
   const cachedResult = await attemptCandidates(cachedCandidates);
-  if (cachedResult) return cachedResult;
+  if (cachedResult) {
+    recentRefreshFailures.delete(refreshKey);
+    return cachedResult;
+  }
 
-  const officialCandidates = await loadOfficialWebSdkMetadataCandidates(options.gameBase);
+  let officialCandidates;
+  try {
+    officialCandidates = await loadOfficialWebSdkMetadataCandidates(options.gameBase);
+  } catch (error) {
+    throw rememberRefreshFailure(refreshKey, error);
+  }
   const officialResult = await attemptCandidates(officialCandidates);
-  if (officialResult) return officialResult;
+  if (officialResult) {
+    recentRefreshFailures.delete(refreshKey);
+    return officialResult;
+  }
 
   if (Date.now() >= deadlineAt) {
     const timeout = new Error(
       `YoStar WebSDK credential refresh exceeded ${REFRESH_BUDGET_MS / 1000}s after ${attempted.size} candidates`
     );
     timeout.code = 'YOSTAR_REFRESH_TIMEOUT';
-    throw timeout;
+    throw rememberRefreshFailure(refreshKey, timeout);
   }
-  throw lastError || new Error('All bounded YoStar WebSDK metadata candidates failed');
+  throw rememberRefreshFailure(
+    refreshKey,
+    lastError || new Error('All bounded YoStar WebSDK metadata candidates failed')
+  );
 }
 
 module.exports = {
@@ -255,15 +306,19 @@ module.exports = {
   MAX_HOSTS_PER_CANDIDATE,
   MAX_OFFICIAL_CANDIDATES,
   QUICK_LOGIN_TIMEOUT_MS,
+  RECENT_FAILURE_TTL_MS,
   REFRESH_BUDGET_MS,
   TRUSTED_STRUCTURAL_SUFFIXES,
   candidateKey,
+  getRecentRefreshFailure,
   hardenWebSdkMetadataCandidates,
   isPrivateHostname,
   loadOfficialWebSdkMetadata,
   loadOfficialWebSdkMetadataCandidates,
   normalizeCredentialHost,
+  refreshAttemptKey,
   refreshYostarCredentials,
+  rememberRefreshFailure,
   strategyRank,
   tryCandidate
 };

@@ -53,7 +53,6 @@ jobs:
       cancel-in-progress: true
     permissions:
       contents: read
-      actions: read
 
     steps:
       - name: Checkout repository
@@ -66,18 +65,6 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-
-      - name: Diagnose manual run #168
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/diagnose-run-168.js
-
-      - name: Upload run #168 diagnostic
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: run-168-diagnostic
-          path: run-168-diagnostic.json
-          retention-days: 1
 
       - name: Install dependencies
         run: npm ci
@@ -198,7 +185,7 @@ jobs:
         env:
           ATTENDANCE_SCHEDULE: ${{ github.event.schedule }}
           ATTENDANCE_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
-          ATTENDANCE_SOURCE: ${{ github.actor == 'github-actions[bot]' && 'watchdog' || 'manual' }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
         run: |
           set -euo pipefail
           marker="${RUNNER_TEMP}/last-attendance-kst.txt"
@@ -272,7 +259,7 @@ jobs:
           SHOULD_RUN: ${{ steps.decision.outputs.should_run }}
           DECISION_REASON: ${{ steps.decision.outputs.reason }}
           ATTENDANCE_STAGE: ${{ steps.decision.outputs.stage }}
-          ATTENDANCE_SOURCE: ${{ github.actor == 'github-actions[bot]' && 'watchdog' || github.event_name }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
           ATTENDANCE_TODAY: ${{ steps.decision.outputs.today }}
           LAST_SUCCESS: ${{ steps.decision.outputs.last_success }}
           PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
@@ -311,4 +298,4 @@ jobs:
           AUTOMATION_OUTCOME: ${{ steps.automation.outcome }}
           CACHE_OUTCOME: ${{ steps.cache.outcome }}
           ATTENDANCE_STAGE: ${{ steps.decision.outputs.stage }}
-          ATTENDANCE_SOURCE: ${{ github.actor == 'github-actions[bot]' && 'watchdog' || 'manual' }}
+          ATTENDANCE_SOURCE: ${{ github.event_name == 'schedule' && 'schedule' || (github.actor == 'github-actions[bot]' && 'watchdog' || 'manual') }}
