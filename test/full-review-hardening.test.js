@@ -17,6 +17,12 @@ const {
   normalizeCredentialHost
 } = require('../src/yostar-websdk-safe');
 const {
+  INSTALL_STATE,
+  MAX_GATEWAY_CONNECTION_ATTEMPTS,
+  assertScheduledGatewayWindow,
+  consumeGatewayAttempt,
+  installHardenedWebSocket,
+  resetGatewayAttemptBudget,
   validateGatewayEndpoint
 } = require('../src/websocket-hardening');
 const {
@@ -70,8 +76,8 @@ test('credential and gateway destinations reject local, reserved, and malformed 
     assert.equal(isUnsafeNetworkHostname(hostname), true, hostname);
   }
   assert.equal(isUnsafeNetworkHostname('game.mahjongsoul.com'), false);
-  assert.equal(normalizeCredentialHost('https://169.254.169.254', { strictOfficial: true }), null);
-  assert.equal(normalizeCredentialHost('https://unrelated.example'), null);
+  assert.equal(normalizeCredentialHost('https://169.254.169.254'), null);
+  assert.equal(normalizeCredentialHost('https://unrelated.vendor-cdn.com'), null);
   assert.equal(
     normalizeCredentialHost('https://sdk-api.yostar.net'),
     'https://sdk-api.yostar.net'
@@ -84,6 +90,29 @@ test('credential and gateway destinations reject local, reserved, and malformed 
   assert.throws(() => validateGatewayEndpoint('wss://127.0.0.1/gateway'), /unsafe host/);
   assert.throws(() => validateGatewayEndpoint('wss://mjusgs.mahjongsoul.com/other'), /exact \/gateway/);
   assert.throws(() => validateGatewayEndpoint('wss://mjusgs.mahjongsoul.com/gateway?x=1'), /exact \/gateway/);
+});
+
+test('scheduled gateway authentication is rechecked at connection time and bounded', () => {
+  const scheduleEnv = { GITHUB_EVENT_NAME: 'schedule' };
+  assert.doesNotThrow(() => assertScheduledGatewayWindow(
+    new Date('2026-07-25T21:24:59.000Z'),
+    scheduleEnv
+  ));
+  assert.throws(
+    () => assertScheduledGatewayWindow(new Date('2026-07-25T21:25:00.000Z'), scheduleEnv),
+    error => error.code === 'OUTSIDE_SAFE_LOGIN_WINDOW' && error.retryable === false
+  );
+
+  resetGatewayAttemptBudget();
+  const now = Date.parse('2026-07-25T21:07:00.000Z');
+  for (let index = 0; index < MAX_GATEWAY_CONNECTION_ATTEMPTS; index += 1) {
+    consumeGatewayAttempt({ now: now + index, env: scheduleEnv });
+  }
+  assert.throws(
+    () => consumeGatewayAttempt({ now: now + 1000, env: scheduleEnv }),
+    error => error.code === 'GATEWAY_ATTEMPT_BUDGET_EXCEEDED' && error.retryable === false
+  );
+  resetGatewayAttemptBudget();
 });
 
 test('encrypted authentication cache is bounded, validated, and round-trips atomically', () => {
@@ -131,4 +160,22 @@ test('manual and scheduled startup paths verify without performing a game login'
   assert.equal(report.cases.delayed0625.shouldRun, false);
   assert.equal(report.cases.manualConfirmed.shouldRun, true);
   assert.equal(report.cases.manualUnconfirmed.shouldRun, false);
+});
+
+test('the ws module can be replaced without losing its public static API', () => {
+  const modulePath = require.resolve('ws');
+  const OriginalWebSocket = require(modulePath);
+  const state = installHardenedWebSocket();
+  try {
+    assert.equal(require(modulePath), state.HardenedWebSocket);
+    assert.equal(state.HardenedWebSocket.OPEN, OriginalWebSocket.OPEN);
+    assert.throws(
+      () => new state.HardenedWebSocket('ws://127.0.0.1/gateway'),
+      /must use wss/
+    );
+  } finally {
+    require.cache[modulePath].exports = OriginalWebSocket;
+    delete globalThis[INSTALL_STATE];
+    resetGatewayAttemptBudget();
+  }
 });
