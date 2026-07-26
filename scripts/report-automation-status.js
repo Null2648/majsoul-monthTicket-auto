@@ -108,6 +108,19 @@ async function findOpenIncident(owner, repo) {
   return null;
 }
 
+function supportsIssueNotifications(repository) {
+  return repository?.has_issues !== false;
+}
+
+function appendNotificationSummary(message, summaryPath = process.env.GITHUB_STEP_SUMMARY) {
+  if (!summaryPath) return;
+  fs.appendFileSync(
+    summaryPath,
+    `\n## 장애 알림\n\n${sanitizeMarkdownText(message)}\n`,
+    'utf8'
+  );
+}
+
 function addIssueComment(owner, repo, issueNumber, body) {
   return githubApi(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments`,
@@ -121,6 +134,12 @@ async function run() {
   if (!owner || !repo) throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
   const context = getFailureContext();
   const jobSucceeded = process.env.JOB_STATUS === 'success';
+  const repositoryInfo = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  if (!supportsIssueNotifications(repositoryInfo)) {
+    const message = '저장소 Issues 기능이 비활성화되어 장애 이슈를 생성하지 않았습니다. 실행 Summary와 진단 아티팩트를 확인하세요.';
+    appendNotificationSummary(message);
+    return console.log(`automation status notification -> ${message}`);
+  }
   const incident = await findOpenIncident(owner, repo);
 
   if (jobSucceeded) {
@@ -156,4 +175,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { findOpenIncident, getFailureContext, githubApi, readEventPayload, run };
+module.exports = {
+  appendNotificationSummary,
+  findOpenIncident,
+  getFailureContext,
+  githubApi,
+  readEventPayload,
+  run,
+  supportsIssueNotifications
+};
