@@ -24,6 +24,8 @@ function getFailureContext() {
   const protocolReport = readJsonFile(PROTOCOL_REPORT_PATH);
   const protocolBreaking = Array.isArray(protocolReport?.breaking) ? protocolReport.breaking : [];
   const outcomes = {
+    preflight: process.env.PREFLIGHT_OUTCOME,
+    install: process.env.INSTALL_OUTCOME,
     tests: process.env.TESTS_OUTCOME,
     jp: process.env.JP_OUTCOME,
     yostar: process.env.YOSTAR_OUTCOME,
@@ -34,10 +36,12 @@ function getFailureContext() {
 
   let classification = automationReport?.classification;
   if (protocolBreaking.length) classification = 'protocol-breaking';
+  if (!classification && outcomes.preflight === 'failure') classification = 'configuration';
   if (!classification && outcomes.jp === 'failure') classification = 'official-metadata';
   if (!classification && outcomes.yostar === 'failure') classification = 'yostar-metadata';
   if (!classification && outcomes.protocol === 'failure') classification = 'protocol-breaking';
   if (!classification && outcomes.tests === 'failure') classification = 'test-failure';
+  if (!classification && outcomes.install === 'failure') classification = 'dependency-install';
   if (!classification && outcomes.cache === 'failure') classification = 'cache-update';
   if (!classification) classification = 'runtime';
 
