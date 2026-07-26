@@ -16,9 +16,6 @@ const {
 const {
   sanitizeMarkdownText
 } = require('../src/automation-alert-hardened');
-const {
-  sanitizeText: sanitizeUpstreamText
-} = require('../scripts/upstream-sync-report');
 
 const repoPath = (...parts) => path.join(process.cwd(), ...parts);
 
@@ -79,27 +76,21 @@ test('YoStar credentials are restricted to trusted HTTPS candidates', () => {
   assert.equal(candidates[1].hosts[0], 'https://official-new.example');
 });
 
-test('issue and upstream text cannot trigger mentions or HTML comments', () => {
+test('issue text cannot trigger mentions or HTML comments', () => {
   const alert = sanitizeMarkdownText('hello @everyone <!-- hidden -->');
-  const upstream = sanitizeUpstreamText('Update by @octocat <!-- marker -->');
   assert.doesNotMatch(alert, /@everyone/);
   assert.doesNotMatch(alert, /<!--/);
-  assert.doesNotMatch(upstream, /@octocat/);
-  assert.doesNotMatch(upstream, /<!--/);
 });
 
-test('pull-request validation is read-only and upstream publishing preserves trusted code', () => {
+test('validation remains read-only and attendance writes only from trusted main', () => {
   const mainWorkflow = fs.readFileSync(repoPath('.github', 'workflows', 'main.yml'), 'utf8');
-  const upstreamWorkflow = fs.readFileSync(repoPath('.github', 'workflows', 'upstream-sync.yml'), 'utf8');
-  const publishWorkflow = upstreamWorkflow.split(/\n  publish:\n/)[1] || '';
+  const attendance = mainWorkflow.split(/\n  attendance:\n/)[1] || '';
   assert.match(mainWorkflow, /validate:\n[\s\S]*?permissions:\n\s+contents: read/);
-  assert.match(mainWorkflow, /attendance:\n[\s\S]*?contents: write/);
+  assert.match(mainWorkflow, /manual_ref_check:/);
+  assert.match(attendance, /contents: write/);
+  assert.match(attendance, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(attendance, /Checkout trusted main branch/);
+  assert.match(attendance, /ref: main/);
   assert.match(mainWorkflow, /persist-credentials: false/);
-  assert.doesNotMatch(upstreamWorkflow, /candidate\.bundle/);
-  assert.doesNotMatch(upstreamWorkflow, /download-artifact/);
-  assert.match(upstreamWorkflow, /EXPECTED_TREE/);
-  assert.match(upstreamWorkflow, /actual_tree/);
-  assert.match(publishWorkflow, /Preserve trusted report generator/);
-  assert.match(publishWorkflow, /trusted-upstream-sync-report\.js/);
-  assert.doesNotMatch(publishWorkflow, /node scripts\/upstream-sync-report\.js/);
+  assert.equal(fs.existsSync(repoPath('.github', 'workflows', 'upstream-sync.yml')), false);
 });
