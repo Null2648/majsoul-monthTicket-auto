@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const https = require('node:https');
 
 function requestJson(url, token = process.env.GITHUB_TOKEN) {
@@ -52,7 +53,9 @@ async function run() {
       steps: (job.steps || []).map(step => ({ name: step.name, conclusion: step.conclusion }))
     }))
   };
-  console.log(JSON.stringify(report, null, 2));
+  const serialized = `${JSON.stringify(report, null, 2)}\n`;
+  fs.writeFileSync('run-168-diagnostic.json', serialized, 'utf8');
+  console.log(serialized);
 }
 
 run().catch(error => {
