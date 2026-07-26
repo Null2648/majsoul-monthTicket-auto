@@ -25,6 +25,19 @@ function normalizeCredentialHost(value) {
   }
 }
 
+function observedHostnames(candidates = []) {
+  const values = [];
+  for (const candidate of candidates) {
+    for (const host of candidate?.hosts || []) {
+      try {
+        const hostname = new URL(String(host)).hostname.toLowerCase();
+        if (hostname && !values.includes(hostname)) values.push(hostname);
+      } catch { /* invalid values remain excluded */ }
+    }
+  }
+  return values.slice(0, 16);
+}
+
 function hardenWebSdkMetadataCandidates(candidates = [], { limit = Infinity } = {}) {
   const result = [];
   const seen = new Set();
@@ -55,9 +68,12 @@ async function loadOfficialWebSdkMetadataCandidates(gameBase) {
     limit: hardened.MAX_OFFICIAL_CANDIDATES
   });
   if (!candidates.length) {
-    throw new Error(
+    const error = new Error(
       'Official YoStar WebSDK metadata contained no HTTPS destination in the reviewed service domains'
     );
+    error.code = 'YOSTAR_HOST_NOT_REVIEWED';
+    error.observedHostnames = observedHostnames(discovered);
+    throw error;
   }
   return candidates;
 }
@@ -133,5 +149,6 @@ module.exports = {
   loadOfficialWebSdkMetadata,
   loadOfficialWebSdkMetadataCandidates,
   normalizeCredentialHost,
+  observedHostnames,
   refreshYostarCredentials
 };
