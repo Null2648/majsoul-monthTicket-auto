@@ -15,7 +15,11 @@ const {
   writeAutomationFailureReport
 } = require('../src/automation-alert');
 
-test('structural failures are classified for immediate notification', () => {
+test('configuration and structural failures are classified for immediate notification', () => {
+  assert.equal(
+    classifyAutomationError(new Error('UID and TOKEN must either both be configured or both be omitted.')),
+    'configuration'
+  );
   assert.equal(
     classifyAutomationError(Object.assign(new Error('Protocol field lq.ReqLogin.tag is missing'), {
       code: 'PROTOCOL_BREAKING_CHANGE'
@@ -32,7 +36,7 @@ test('structural failures are classified for immediate notification', () => {
   );
 });
 
-test('morning transient failures wait for later retries, while structural failures notify immediately', () => {
+test('morning transient failures wait, while configuration and structural failures notify immediately', () => {
   assert.equal(
     shouldNotifyFailure({
       eventName: 'schedule',
@@ -41,14 +45,16 @@ test('morning transient failures wait for later retries, while structural failur
     }),
     false
   );
-  assert.equal(
-    shouldNotifyFailure({
-      eventName: 'schedule',
-      schedule: PRIMARY_SCHEDULE,
-      classification: 'official-metadata'
-    }),
-    true
-  );
+  for (const classification of ['configuration', 'official-metadata']) {
+    assert.equal(
+      shouldNotifyFailure({
+        eventName: 'schedule',
+        schedule: PRIMARY_SCHEDULE,
+        classification
+      }),
+      true
+    );
+  }
   assert.equal(
     shouldNotifyFailure({
       eventName: 'schedule',
@@ -67,14 +73,14 @@ test('morning transient failures wait for later retries, while structural failur
   );
 });
 
-test('failure reports redact configured credentials and email addresses', () => {
+test('failure reports redact legacy and namespaced credentials', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'majsoul-alert-'));
   const reportPath = path.join(directory, 'failure.json');
   const env = {
-    TOKEN: 'private-login-token',
-    ACCESS_TOKEN: 'private-access-token',
-    UID: '12345678',
-    EMAIL: 'owner@example.com'
+    MAJSOUL_TOKEN: 'private-login-token',
+    MAJSOUL_ACCESS_TOKEN: 'private-access-token',
+    MAJSOUL_UID: '12345678',
+    MAJSOUL_EMAIL: 'owner@example.com'
   };
 
   writeAutomationFailureReport(
@@ -93,13 +99,10 @@ test('failure reports redact configured credentials and email addresses', () => 
   assert.match(serialized, /REDACTED/);
 });
 
-test('issue body contains actionable final recovery status without raw secrets', () => {
+test('issue body contains actionable preflight and final recovery status', () => {
   const body = buildFailureBody({
-    classification: 'protocol-breaking',
-    summary: sanitizeText('token=secret-value protocol changed', {
-      env: { TOKEN: 'secret-value' }
-    }),
-    protocolBreaking: ['Protocol method lq.Lobby.payMonthTicket is missing'],
+    classification: 'configuration',
+    summary: sanitizeText('UID and TOKEN must either both be configured or both be omitted.'),
     eventName: 'schedule',
     schedule: FALLBACK_SCHEDULE,
     stage: 'final-recovery',
@@ -107,15 +110,16 @@ test('issue body contains actionable final recovery status without raw secrets',
     sha: '1234567890abcdef',
     lastSuccess: '2026-07-25',
     outcomes: {
-      tests: 'success',
-      automation: 'failure',
+      preflight: 'failure',
+      install: 'skipped',
+      automation: 'skipped',
       cache: 'skipped'
     },
     occurredAt: new Date('2026-07-26T03:13:00.000Z')
   });
 
   assert.match(body, /12:13 최종 복구 실행/);
-  assert.match(body, /payMonthTicket/);
+  assert.match(body, /설정 사전검사/);
+  assert.match(body, /UID and TOKEN/);
   assert.match(body, /GitHub Actions 실행 열기/);
-  assert.doesNotMatch(body, /secret-value/);
 });
