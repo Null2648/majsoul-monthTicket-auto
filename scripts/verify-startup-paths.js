@@ -73,7 +73,7 @@ function verifyStartupPaths({ repositoryRoot = process.cwd() } = {}) {
   assert.match(mainWorkflow, /cron: '7,17 6 \* \* \*'/);
   assert.match(mainWorkflow, /confirm_not_playing:/);
   assert.match(mainWorkflow, /github\.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(mainWorkflow, /cron: '[^']*(?:7|8|9|10|11|12|13) [^']*'/);
+  assert.doesNotMatch(mainWorkflow, /cron: '[^' ]+ (?:7|8|9|10|11|12|13)(?:[ ,*\/-]|')/);
   assert.match(safetyWorkflow, /Check success marker without logging in/);
   assert.doesNotMatch(safetyWorkflow, /actions: write/);
   assert.doesNotMatch(safetyWorkflow, /dispatches/);
