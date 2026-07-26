@@ -29,13 +29,13 @@
 5. `jp`, `en`, `kr` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `UID`와 `TOKEN` 시크릿을 추가합니다. JP 서버는 같은 브라우저에서 아래 방법으로 확인한 `YOSTAR_DEVICE_ID`도 추가합니다. 기존 `ACCESS_TOKEN` 시크릿이 있으면 먼저 재사용하고, 거부될 때 `UID`와 `TOKEN`으로 자동 재인증합니다.
 6. `cn` 서버를 사용할 경우 `New repository secret` 버튼을 다시 눌러 `EMAIL`과 `PASSWORD` 시크릿을 추가합니다. 값에는 계정 이메일과 비밀번호 원문을 입력합니다.
 7. `Settings > Actions > General`로 이동해 `Workflow permissions`를 `Read and write permissions`로 변경합니다.
-8. 예약 출석은 `Asia/Seoul` 기준 매일 오전 6시 17분에 실행되며, 오전 6시 47분에 보조 실행이 한 번 더 예약되어 있습니다. 첫 실행이 성공하면 날짜 기록을 확인한 보조 실행은 로그인하지 않고 종료됩니다. 시각을 바꾸려면 `.github/workflows/main.yml`의 `cron`과 `timezone` 값을 수정합니다.
+8. 예약 출석은 `Asia/Seoul` 기준 오전 6시 07분부터 10시 52분까지 15분 간격으로 시도합니다. 한 번 성공하면 `last-attendance-kst.txt`의 날짜를 확인한 후속 실행은 로그인하지 않고 종료됩니다. 오전 예약이 모두 누락되면 별도 `Attendance Watchdog`이 오전 11시 31분부터 오후 2시 31분까지 성공 기록을 확인하고 `Login to Majsoul`을 다시 호출합니다. 오후 12시 13분에는 본 워크플로의 최종 복구 예약도 실행됩니다.
 9. 저장소 상단 `Actions` 탭으로 이동해 `I understand my workflows, go ahead and enable them` 버튼을 눌러 워크플로를 활성화합니다.
-10. 왼쪽 `Workflows` 목록에서 `Login to Majsoul`을 선택하고 `Enable workflow`를 눌러 워크플로를 켭니다.
+10. 왼쪽 `Workflows` 목록에서 `Login to Majsoul`과 `Attendance Watchdog`을 각각 선택하고 `Enable workflow`를 눌러 두 워크플로를 모두 켭니다.
 
 ## 테스트 방법
 1. 브라우저에서 작혼 계정을 로그인 상태로 둡니다.
-2. GitHub의 `Actions > Workflows`에서 `Run workflow`를 클릭해 수동 실행합니다.
+2. GitHub의 `Actions > Workflows`에서 `Login to Majsoul`의 `Run workflow`를 클릭해 수동 실행합니다. 이미 오늘 성공했더라도 다시 확인하려면 `force`를 켭니다.
 3. 올바르게 동작하면 브라우저 세션이 서버에 의해 종료됩니다.
 
 ## 클라이언트 업데이트 처리
@@ -72,7 +72,7 @@ JP 로그인 토큰은 발급한 브라우저의 YoStar DeviceID와 함께 검�
 ```
 
 ## 주의
-- GitHub Actions 예약 실행은 서버 부하에 따라 지연되거나 누락될 수 있습니다. 보조 예약으로 가능성을 낮췄지만 정확한 분 단위 실행은 보장되지 않습니다.
+- GitHub Actions 예약 실행은 서버 부하에 따라 지연되거나 개별 이벤트가 누락될 수 있습니다. 오전 반복 예약과 독립 감시 워크플로로 단일 예약 의존성을 제거했지만 정확한 분 단위 시작은 보장되지 않습니다.
 - 액세스 토큰과 계정 정보는 외부에 노출되지 않도록 주의하세요.
 
 ## 문의

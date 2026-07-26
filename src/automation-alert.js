@@ -1,5 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  FINAL_RECOVERY_SCHEDULE,
+  MORNING_RETRY_SCHEDULE
+} = require('./attendance-schedule');
 
 const AUTOMATION_FAILURE_REPORT_PATH = path.join(
   process.cwd(),
@@ -7,8 +11,8 @@ const AUTOMATION_FAILURE_REPORT_PATH = path.join(
 );
 const INCIDENT_MARKER = '<!-- majsoul-attendance-alert -->';
 const INCIDENT_TITLE = '[자동 출석 장애] 점검 필요';
-const PRIMARY_SCHEDULE = '17 6 * * *';
-const FALLBACK_SCHEDULE = '47 6 * * *';
+const PRIMARY_SCHEDULE = MORNING_RETRY_SCHEDULE;
+const FALLBACK_SCHEDULE = FINAL_RECOVERY_SCHEDULE;
 const IMMEDIATE_CLASSIFICATIONS = new Set([
   'protocol-breaking',
   'official-metadata',
@@ -123,11 +127,11 @@ function readJsonFile(filePath) {
   }
 }
 
-function shouldNotifyFailure({ eventName, schedule, classification }) {
+function shouldNotifyFailure({ eventName, schedule, classification, stage }) {
   if (eventName === 'workflow_dispatch') return true;
   if (eventName !== 'schedule') return false;
-  if (schedule === FALLBACK_SCHEDULE) return true;
-  if (schedule === PRIMARY_SCHEDULE) {
+  if (schedule === FALLBACK_SCHEDULE || stage === 'final-recovery') return true;
+  if (schedule === PRIMARY_SCHEDULE || stage === 'morning-retry-window') {
     return IMMEDIATE_CLASSIFICATIONS.has(classification);
   }
   return true;
@@ -148,9 +152,12 @@ function formatKstDateTime(date = new Date()) {
   return `${value.year}-${value.month}-${value.day} ${value.hour}:${value.minute}:${value.second} KST`;
 }
 
-function describeSchedule(schedule) {
-  if (schedule === PRIMARY_SCHEDULE) return '06:17 1차 실행';
-  if (schedule === FALLBACK_SCHEDULE) return '06:47 재시도';
+function describeSchedule(schedule, stage) {
+  if (schedule === PRIMARY_SCHEDULE || stage === 'morning-retry-window') {
+    return '06:07~10:52 오전 자동 재시도';
+  }
+  if (schedule === FALLBACK_SCHEDULE || stage === 'final-recovery') return '12:13 최종 복구 실행';
+  if (stage === 'watchdog-dispatch') return '독립 감시 워크플로 복구 호출';
   return schedule || '수동 실행';
 }
 
@@ -188,6 +195,7 @@ function buildFailureBody({
   protocolBreaking = [],
   eventName,
   schedule,
+  stage,
   runUrl,
   sha,
   lastSuccess,
@@ -203,7 +211,7 @@ function buildFailureBody({
     '자동 출석 작업에서 점검이 필요한 실패가 감지되었습니다.',
     '',
     `- 발생 시각: ${formatKstDateTime(occurredAt)}`,
-    `- 실행 구분: ${eventName === 'schedule' ? describeSchedule(schedule) : '수동 실행'}`,
+    `- 실행 구분: ${eventName === 'schedule' ? describeSchedule(schedule, stage) : describeSchedule('', stage)}`,
     `- 분류: \`${classification}\``,
     `- 마지막 성공일: ${lastSuccess || '기록 없음'}`,
     `- 커밋: \`${String(sha || '').slice(0, 12) || '확인 불가'}\``,
@@ -215,7 +223,7 @@ function buildFailureBody({
     '### 감지된 원인',
     details,
     '',
-    '06:17의 일반적인 일시 오류는 06:47 재시도까지 기다립니다. 구조 변경이나 재시도 실패는 이 이슈에 계속 기록되며, 이후 출석이 성공하면 자동으로 종료됩니다.'
+    '오전 재시도 창의 일반적인 일시 오류는 다음 예약까지 기다립니다. 구조 변경은 즉시 알리고, 12:13 최종 복구 실패도 이 이슈에 기록합니다. 이후 출석이 성공하면 자동으로 종료됩니다.'
   ].join('\n');
 }
 
@@ -223,7 +231,7 @@ function buildFailureComment(context) {
   return [
     `### 실패 재발 — ${formatKstDateTime(context.occurredAt || new Date())}`,
     '',
-    `- 실행 구분: ${context.eventName === 'schedule' ? describeSchedule(context.schedule) : '수동 실행'}`,
+    `- 실행 구분: ${context.eventName === 'schedule' ? describeSchedule(context.schedule, context.stage) : describeSchedule('', context.stage)}`,
     `- 분류: \`${context.classification}\``,
     `- 실행 기록: [GitHub Actions 실행 열기](${context.runUrl})`,
     '',
@@ -233,11 +241,11 @@ function buildFailureComment(context) {
   ].join('\n');
 }
 
-function buildRecoveryComment({ runUrl, schedule, eventName, occurredAt = new Date() }) {
+function buildRecoveryComment({ runUrl, schedule, stage, eventName, occurredAt = new Date() }) {
   return [
     `### 자동 복구 확인 — ${formatKstDateTime(occurredAt)}`,
     '',
-    `- 실행 구분: ${eventName === 'schedule' ? describeSchedule(schedule) : '수동 실행'}`,
+    `- 실행 구분: ${eventName === 'schedule' ? describeSchedule(schedule, stage) : describeSchedule('', stage)}`,
     `- 실행 기록: [GitHub Actions 실행 열기](${runUrl})`,
     '',
     '자동 출석이 정상 완료되어 이 장애 이슈를 종료합니다.'
