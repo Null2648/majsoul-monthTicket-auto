@@ -1,9 +1,12 @@
+const fs = require('node:fs');
 const {
   installGlobalMetadataFetchGuard
 } = require('../src/network-hardening');
 const {
   loadOfficialWebSdkMetadataCandidates
 } = require('../src/yostar-websdk-safe');
+
+const DIAGNOSTIC_PATH = 'yostar-safe-diagnostic.json';
 
 async function run() {
   installGlobalMetadataFetchGuard();
@@ -22,6 +25,16 @@ async function run() {
 }
 
 run().catch(error => {
+  fs.writeFileSync(DIAGNOSTIC_PATH, `${JSON.stringify({
+    failedAt: new Date().toISOString(),
+    code: String(error?.code || ''),
+    message: String(error?.message || error),
+    observedHostnames: Array.isArray(error?.observedHostnames)
+      ? error.observedHostnames.slice(0, 16)
+      : []
+  }, null, 2)}\n`, 'utf8');
   console.error(error?.stack || error?.message || error);
   process.exitCode = 1;
 });
+
+module.exports = { DIAGNOSTIC_PATH, run };
