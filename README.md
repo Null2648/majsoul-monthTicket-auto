@@ -7,12 +7,12 @@
 
 [日本語](README-ja.md) [한국어](README-ko.md) [中文](README-zh.md)
 
-This project automates daily logins to Majsoul to achieve the attendance achievement (8bit Riichi BGM) and collect the daily Fortune Charm using GitHub Actions.  
+This project automates daily Majsoul login and attendance rewards with GitHub Actions.  
 
 ## Prerequisites
 1. Open Majsoul in your browser.
 2. Press `F12` and switch to the `Console` tab.
-3. Run the following code:
+3. Run:
    ```js
    {
      const r = await test_sdk.Login({ openQuickLogin: true });
@@ -20,37 +20,34 @@ This project automates daily logins to Majsoul to achieve the attendance achieve
      console.log(`UID: ${r.data.LOGIN_UID}\nTOKEN: ${r.data.LOGIN_TOKEN}`);
    }
    ```
-4. Save the printed `UID` and `TOKEN` values for JP/EN/KR server setup. If `test_sdk` is not defined, wait until the game finishes loading and try again.
-5. For CN, use your account email and password instead. The script calculates the required password hash internally.
+4. Save the printed `UID` and `TOKEN` values for JP/EN/KR. If `test_sdk` is unavailable, wait for the game to finish loading and retry.
+5. CN uses the account email and password.
 
-## Setup Instructions
-1. Fork this repository on GitHub.
-2. In your fork, go to `Settings > Secrets and variables > Actions`.
-3. Click `New repository secret` and add `MS_SERVER`.
-4. Set `MS_SERVER` to one of `jp`, `en`, `kr`, or `cn`. If you do not set it, the default is `jp`.
-5. If you use the `jp`, `en`, or `kr` server, click `New repository secret` again and add `UID` and `TOKEN`. An existing `ACCESS_TOKEN` is reused first, with automatic reauthorization through `UID` and `TOKEN` if it is rejected.
-6. If you use the `cn` server, click `New repository secret` again and add `EMAIL` and `PASSWORD` with your account email and plaintext password.
-7. Go to `Settings > Actions > General` and change `Workflow permissions` to `Read and write permissions`.
-8. Scheduled attendance attempts run every 15 minutes from 6:07 AM through 10:52 AM in `Asia/Seoul`. Once one run succeeds, later attempts read `last-attendance-kst.txt` and exit before logging in. If the morning scheduler misses every event, the separate `Attendance Watchdog` checks the marker from 11:31 AM through 2:31 PM and dispatches `Login to Majsoul` again. The main workflow also has a final 12:13 PM recovery schedule.
-9. Open the `Actions` tab and click `I understand my workflows, go ahead and enable them` to enable workflows.
-10. Select both `Login to Majsoul` and `Attendance Watchdog` from the left-side `Workflows` list and click `Enable workflow` for each one.
+## Setup
+1. Fork this repository.
+2. Open `Settings > Secrets and variables > Actions` in the fork.
+3. Add `MS_SERVER` with `jp`, `en`, `kr`, or `cn`; the default is `jp`.
+4. JP/EN/KR require `UID` and `TOKEN`, or a reusable `ACCESS_TOKEN`. JP should also configure `YOSTAR_DEVICE_ID` from the same browser session.
+5. CN requires `EMAIL` and `PASSWORD`.
+6. In `Settings > Actions > General`, set `Workflow permissions` to `Read and write permissions`.
+7. Enable both `Login to Majsoul` and `Attendance Watchdog` in the Actions tab.
+8. Attendance is attempted hourly from 06:17 through 10:17 Asia/Seoul, with a final recovery at 12:13. The independent watchdog checks at 11:31 and 13:31 and dispatches trusted `main` when no success marker exists.
 
-## Testing Instructions
-1. Stay logged in to Majsoul in your browser.
-2. In GitHub, open `Actions > Login to Majsoul`, click `Run workflow`, and leave `force` enabled when you intentionally want another run after today's attendance has already succeeded.
-3. If it works correctly, your browser session may be disconnected because of a duplicate login.
+## Manual run
+1. Open `Actions > Login to Majsoul` and click `Run workflow`.
+2. **Always select `main` under `Use workflow from`.** Other refs are rejected before account secrets are used and the run summary explains the cause.
+3. Leave `Run even when attendance already succeeded today` enabled when you want to force another check.
+4. Manual runs upload `attendance-run-report.json` with the branch, decision, and per-stage outcomes.
 
 ## Client update handling
-- Each run checks the small official `version.json` and Unity `productVersion` first.
-- If they are unchanged, the last successful client settings are reused immediately.
-- Unity `productVersion` is used for package and route metadata. The last successful authentication resource version remains the fast path; only the official outdated-client error 150 activates a bounded sequential recovery scan, and the successful value is cached for later runs.
-- The route handshake mirrors the current Unity client, including its Web platform field and second-based timestamp. Login-queue error 151 refreshes the route/session instead of incorrectly scanning client versions.
-- The Unity client derives the authentication resource from `docs_version/version.json`; recovery alternates around the last successful value instead of assuming every update increments it.
-- The current Unity client no longer exposes the old `game`/`Laya` globals, so use the `test_sdk.Login` method above.
+- Small official metadata is checked first and the last successful client settings remain the fast path.
+- Official client strings, Unity structure, YoStar WebSDK metadata, and the used `liqi.json` contract are monitored without executing downloaded JavaScript.
+- New protocol baselines are promoted only after a complete successful attendance run.
+- Successful login state is encrypted using the configured UID/TOKEN and no plaintext token is committed.
 
 ## Caution
-- GitHub Actions scheduled events can be delayed or individually dropped. The repeated morning window and independently registered watchdog remove the single-schedule dependency, but an exact minute cannot be guaranteed.
-- Be careful not to expose your access token or other credentials to anyone.
+- Scheduled GitHub Actions can be delayed or individual events can be dropped. Multiple morning attempts and an independent watchdog reduce this risk but cannot guarantee exact start times.
+- Keep all account credentials private.
 
 ## Contact
 - [Discord](https://discord.com/users/245702966085025802)
