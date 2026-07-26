@@ -158,6 +158,7 @@ jobs:
         env:
           ATTENDANCE_SCHEDULE: ${{ github.event.schedule }}
           ATTENDANCE_FORCE: ${{ inputs.force }}
+          ATTENDANCE_SOURCE: ${{ inputs.source }}
         run: |
           set -euo pipefail
           marker="${RUNNER_TEMP}/last-attendance-kst.txt"
