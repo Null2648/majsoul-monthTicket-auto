@@ -1,8 +1,14 @@
 const { Buffer } = require('node:buffer');
+const net = require('node:net');
 
 const FETCH_GUARD_STATE = Symbol.for('majsoul.networkMetadataGuard');
 const FETCH_SCOPE_STATE = Symbol.for('majsoul.structureFetchScope');
 const DEFAULT_TIMEOUT_MS = 15000;
+const PRIMITIVE_PROTO_TYPES = new Set([
+  'double', 'float', 'int32', 'int64', 'uint32', 'uint64',
+  'sint32', 'sint64', 'fixed32', 'fixed64', 'sfixed32', 'sfixed64',
+  'bool', 'string', 'bytes'
+]);
 
 function requestUrl(input) {
   try {
@@ -38,6 +44,134 @@ function responseLimit(url, method = 'GET') {
     return 24 * 1024 * 1024;
   }
   return null;
+}
+
+function jsonStructureBudget(url) {
+  const pathname = String(url?.pathname || '').toLowerCase();
+  if (/liqi(?:\.min)?\.json$/.test(pathname)) {
+    return { maxDepth: 128, maxNodes: 1500000, maxCollection: 500000, protocolDepth: 128 };
+  }
+  if (/(?:resversion|resource[-_.]?version|resmanifest|manifest)[^/]*\.json$/.test(pathname)) {
+    return { maxDepth: 80, maxNodes: 1500000, maxCollection: 500000 };
+  }
+  if (
+    /(?:^|\/)(?:client[-_.]?)?config(?:uration)?[^/]*\.json$/.test(pathname) ||
+    /\/streamingassets\/webgl\/yostarsdk\/config\.json$/.test(pathname) ||
+    /\/(?:api\/clientgate\/routes|clientgate\/routes|api\/clientgate\/route|api\/routes|routes)\/?$/.test(pathname)
+  ) {
+    return { maxDepth: 48, maxNodes: 150000, maxCollection: 50000 };
+  }
+  return null;
+}
+
+function assertBoundedJsonValue(value, budget) {
+  const stack = [{ value, depth: 0 }];
+  let nodes = 0;
+
+  while (stack.length) {
+    const current = stack.pop();
+    nodes += 1;
+    if (nodes > budget.maxNodes) {
+      throw new Error(`network JSON structure exceeds ${budget.maxNodes} nodes`);
+    }
+    if (current.depth > budget.maxDepth) {
+      throw new Error(`network JSON structure exceeds depth ${budget.maxDepth}`);
+    }
+    if (!current.value || typeof current.value !== 'object') continue;
+
+    const entries = Array.isArray(current.value)
+      ? current.value.map((item, index) => [String(index), item])
+      : Object.entries(current.value);
+    if (entries.length > budget.maxCollection) {
+      throw new Error(`network JSON collection exceeds ${budget.maxCollection} entries`);
+    }
+
+    for (const [key, child] of entries) {
+      if (key === '__proto__' || key === 'prototype') {
+        throw new Error(`network JSON contains forbidden key ${key}`);
+      }
+      if (child && typeof child === 'object') {
+        stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+  }
+}
+
+function normalizeProtoTypeName(value) {
+  return String(value || '').trim().replace(/^\./, '');
+}
+
+function namespaceOf(value) {
+  const parts = normalizeProtoTypeName(value).split('.');
+  parts.pop();
+  return parts.join('.');
+}
+
+function assertBoundedProtocolReferences(root, maxDepth = 128) {
+  if (!root?.nested) return;
+  const types = new Map();
+  const pending = [{ node: root, prefix: '' }];
+
+  while (pending.length) {
+    const { node, prefix } = pending.pop();
+    for (const [name, child] of Object.entries(node?.nested || {})) {
+      const fullName = prefix ? `${prefix}.${name}` : name;
+      if (child?.fields) types.set(fullName, child);
+      if (child?.nested) pending.push({ node: child, prefix: fullName });
+    }
+  }
+
+  const edges = new Map();
+  for (const [owner, node] of types) {
+    const ownerNamespace = namespaceOf(owner);
+    const topNamespace = ownerNamespace.split('.')[0];
+    const values = [];
+    for (const field of Object.values(node.fields || {})) {
+      const raw = normalizeProtoTypeName(field?.type);
+      if (!raw || PRIMITIVE_PROTO_TYPES.has(raw)) continue;
+      const candidates = raw.includes('.')
+        ? [raw]
+        : [ownerNamespace && `${ownerNamespace}.${raw}`, topNamespace && `${topNamespace}.${raw}`, raw].filter(Boolean);
+      const resolved = candidates.find(candidate => types.has(candidate));
+      if (resolved && !values.includes(resolved)) values.push(resolved);
+    }
+    edges.set(owner, values);
+  }
+
+  let transitions = 0;
+  const maxTransitions = Math.max(200000, types.size * 256);
+  for (const start of types.keys()) {
+    const stack = [{ name: start, depth: 1, path: new Set([start]) }];
+    while (stack.length) {
+      const current = stack.pop();
+      if (current.depth > maxDepth) {
+        throw new Error(`protocol message reference chain exceeds depth ${maxDepth}`);
+      }
+      for (const next of edges.get(current.name) || []) {
+        transitions += 1;
+        if (transitions > maxTransitions) {
+          throw new Error(`protocol message graph exceeds ${maxTransitions} traversal transitions`);
+        }
+        if (current.path.has(next)) continue;
+        const path = new Set(current.path);
+        path.add(next);
+        stack.push({ name: next, depth: current.depth + 1, path });
+      }
+    }
+  }
+}
+
+function assertBoundedJsonBody(body, url) {
+  const budget = jsonStructureBudget(url);
+  if (!budget || !body?.length) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(body.toString('utf8'));
+  } catch {
+    return;
+  }
+  assertBoundedJsonValue(parsed, budget);
+  if (budget.protocolDepth) assertBoundedProtocolReferences(parsed, budget.protocolDepth);
 }
 
 async function readBodyLimited(response, maxBytes) {
@@ -76,6 +210,52 @@ function rebuildResponse(response, body) {
   });
 }
 
+function normalizeHostname(value) {
+  return String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function isUnsafeIpv4(address) {
+  const parts = address.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  const [a, b, c] = parts;
+  return (
+    a === 0 || a === 10 || a === 127 || a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 192 && b === 0 && c === 2) ||
+    (a === 192 && b === 88 && c === 99) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113)
+  );
+}
+
+function isUnsafeIpv6(address) {
+  const host = normalizeHostname(address);
+  if (host === '::' || host === '::1') return true;
+  if (/^(?:fc|fd)/.test(host) || /^fe[89ab]/.test(host) || /^ff/.test(host)) return true;
+  if (/^2001:db8(?::|$)/.test(host)) return true;
+  const mapped = host.match(/^(?:0*:)*ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  return mapped ? isUnsafeIpv4(mapped[1]) : false;
+}
+
+function isUnsafeNetworkHostname(hostname) {
+  const host = normalizeHostname(hostname);
+  if (!host) return true;
+  if (
+    host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') ||
+    host.endsWith('.internal') || host.endsWith('.home.arpa') ||
+    host.endsWith('.invalid') || host.endsWith('.test') || host.endsWith('.example')
+  ) return true;
+  const family = net.isIP(host);
+  if (family === 4) return isUnsafeIpv4(host);
+  if (family === 6) return isUnsafeIpv6(host);
+  return false;
+}
+
 function installGlobalMetadataFetchGuard({ fetchImpl = global.fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const existing = globalThis[FETCH_GUARD_STATE];
   if (existing) return existing;
@@ -92,6 +272,7 @@ function installGlobalMetadataFetchGuard({ fetchImpl = global.fetch, timeoutMs =
       signal: init.signal || AbortSignal.timeout(timeoutMs)
     });
     const body = await readBodyLimited(response, maxBytes);
+    assertBoundedJsonBody(body, url);
     return rebuildResponse(response, body);
   };
 
@@ -161,9 +342,15 @@ function scopeStructureFetch(structure) {
 module.exports = {
   FETCH_GUARD_STATE,
   FETCH_SCOPE_STATE,
+  assertBoundedJsonBody,
+  assertBoundedJsonValue,
+  assertBoundedProtocolReferences,
   installGlobalMetadataFetchGuard,
   isMetadataPath,
   isRoutePath,
+  isUnsafeNetworkHostname,
+  jsonStructureBudget,
+  normalizeHostname,
   readBodyLimited,
   requestUrl,
   responseLimit,
