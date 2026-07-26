@@ -7,14 +7,18 @@ const {
   isUnsafeNetworkHostname
 } = require('./network-hardening');
 
-function normalizeCredentialHost(value, { strictOfficial = false } = {}) {
+function isTrustedCredentialDomain(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return hardened.TRUSTED_STRUCTURAL_SUFFIXES.some(
+    suffix => host === suffix || host.endsWith(`.${suffix}`)
+  );
+}
+
+function normalizeCredentialHost(value) {
   try {
     const url = new URL(String(value || '').trim());
     if (url.protocol !== 'https:' || url.username || url.password) return null;
-    if (isUnsafeNetworkHostname(url.hostname)) return null;
-    if (!strictOfficial && !hardened.TRUSTED_STRUCTURAL_SUFFIXES.some(
-      suffix => url.hostname === suffix || url.hostname.endsWith(`.${suffix}`)
-    )) return null;
+    if (isUnsafeNetworkHostname(url.hostname) || !isTrustedCredentialDomain(url.hostname)) return null;
     return url.toString().replace(/\/+$/, '');
   } catch {
     return null;
@@ -28,11 +32,9 @@ function hardenWebSdkMetadataCandidates(candidates = [], { limit = Infinity } = 
     (a, b) => hardened.strategyRank(a?.strategy) - hardened.strategyRank(b?.strategy)
   );
   for (const candidate of sorted) {
-    const strategy = String(candidate?.strategy || '');
-    const strictOfficial = strategy.includes('strict-config');
     const hosts = [...new Set(
       (candidate?.hosts || [])
-        .map(host => normalizeCredentialHost(host, { strictOfficial }))
+        .map(host => normalizeCredentialHost(host))
         .filter(Boolean)
     )].slice(0, hardened.MAX_HOSTS_PER_CANDIDATE);
     const pid = String(candidate?.pid || '').trim();
@@ -53,7 +55,9 @@ async function loadOfficialWebSdkMetadataCandidates(gameBase) {
     limit: hardened.MAX_OFFICIAL_CANDIDATES
   });
   if (!candidates.length) {
-    throw new Error('Official YoStar WebSDK metadata contained no safe public HTTPS destination');
+    throw new Error(
+      'Official YoStar WebSDK metadata contained no HTTPS destination in the reviewed service domains'
+    );
   }
   return candidates;
 }
@@ -125,6 +129,7 @@ module.exports = {
   ...base,
   ...hardened,
   hardenWebSdkMetadataCandidates,
+  isTrustedCredentialDomain,
   loadOfficialWebSdkMetadata,
   loadOfficialWebSdkMetadataCandidates,
   normalizeCredentialHost,
