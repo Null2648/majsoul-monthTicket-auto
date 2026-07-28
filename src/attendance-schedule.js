@@ -2,12 +2,10 @@ const fs = require('node:fs');
 
 const TIME_ZONE = 'Asia/Seoul';
 // 21:05 UTC is 06:05 KST on the following calendar day. Korea has no DST.
-// This exact single cron is the historically proven schedule for this repository.
+// There is exactly one automatic attendance event per day.
 const AUTOMATIC_LOGIN_SCHEDULE = '5 21 * * *';
 const MORNING_RETRY_SCHEDULE = AUTOMATIC_LOGIN_SCHEDULE;
 const WATCHDOG_SCHEDULE = '50 6 * * *';
-const SAFE_LOGIN_WINDOW_START_MINUTES = 6 * 60;
-const SAFE_LOGIN_WINDOW_END_MINUTES = 6 * 60 + 25;
 
 function getKstDateTimeParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -43,17 +41,8 @@ function normalizeAttendanceDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
 }
 
-function isWithinAutomaticLoginWindow(date = new Date()) {
-  const value = getKstDateTimeParts(date);
-  const minutes = value.hour * 60 + value.minute;
-  return (
-    minutes >= SAFE_LOGIN_WINDOW_START_MINUTES &&
-    minutes < SAFE_LOGIN_WINDOW_END_MINUTES
-  );
-}
-
 function scheduleStage(schedule) {
-  if (schedule === AUTOMATIC_LOGIN_SCHEDULE) return 'safe-morning-window';
+  if (schedule === AUTOMATIC_LOGIN_SCHEDULE) return 'single-daily-schedule';
   if (schedule === WATCHDOG_SCHEDULE) return 'safety-watchdog';
   return schedule ? 'scheduled-other' : 'manual';
 }
@@ -121,31 +110,24 @@ function decideAttendanceRun({
     });
   }
 
-  if (scheduled) {
-    if (schedule !== AUTOMATIC_LOGIN_SCHEDULE) {
-      return decision({
-        shouldRun: false,
-        reason: 'unsupported-schedule',
-        stage,
-        today,
-        lastSuccess: normalizedLastSuccess
-      });
-    }
-
-    if (!isWithinAutomaticLoginWindow(now)) {
-      return decision({
-        shouldRun: false,
-        reason: 'outside-safe-login-window',
-        stage,
-        today,
-        lastSuccess: normalizedLastSuccess
-      });
-    }
+  if (scheduled && schedule !== AUTOMATIC_LOGIN_SCHEDULE) {
+    return decision({
+      shouldRun: false,
+      reason: 'unsupported-schedule',
+      stage,
+      today,
+      lastSuccess: normalizedLastSuccess
+    });
   }
 
+  // GitHub may allocate a scheduled runner later than the cron minute. The cron
+  // still represents one daily event, so do not turn that event into a no-op
+  // merely because its runner started late.
   return decision({
     shouldRun: true,
-    reason: normalizedLastSuccess ? 'not-completed-today' : 'no-success-marker',
+    reason: scheduled
+      ? 'single-scheduled-event'
+      : (normalizedLastSuccess ? 'not-completed-today' : 'no-success-marker'),
     stage,
     today,
     lastSuccess: normalizedLastSuccess
@@ -210,8 +192,6 @@ if (require.main === module) {
 module.exports = {
   AUTOMATIC_LOGIN_SCHEDULE,
   MORNING_RETRY_SCHEDULE,
-  SAFE_LOGIN_WINDOW_END_MINUTES,
-  SAFE_LOGIN_WINDOW_START_MINUTES,
   TIME_ZONE,
   WATCHDOG_SCHEDULE,
   appendGithubOutput,
@@ -219,7 +199,6 @@ module.exports = {
   dispatchStage,
   formatKstDate,
   getKstDateTimeParts,
-  isWithinAutomaticLoginWindow,
   normalizeAttendanceDate,
   parseBoolean,
   readMarker,
