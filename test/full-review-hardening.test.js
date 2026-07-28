@@ -19,7 +19,6 @@ const {
 const {
   INSTALL_STATE,
   MAX_GATEWAY_CONNECTION_ATTEMPTS,
-  assertScheduledGatewayWindow,
   consumeGatewayAttempt,
   installHardenedWebSocket,
   resetGatewayAttemptBudget,
@@ -92,24 +91,14 @@ test('credential and gateway destinations reject local, reserved, and malformed 
   assert.throws(() => validateGatewayEndpoint('wss://mjusgs.mahjongsoul.com/gateway?x=1'), /exact \/gateway/);
 });
 
-test('scheduled gateway authentication is rechecked at connection time and bounded', () => {
-  const scheduleEnv = { GITHUB_EVENT_NAME: 'schedule' };
-  assert.doesNotThrow(() => assertScheduledGatewayWindow(
-    new Date('2026-07-25T21:24:59.000Z'),
-    scheduleEnv
-  ));
-  assert.throws(
-    () => assertScheduledGatewayWindow(new Date('2026-07-25T21:25:00.000Z'), scheduleEnv),
-    error => error.code === 'OUTSIDE_SAFE_LOGIN_WINDOW' && error.retryable === false
-  );
-
+test('gateway recovery remains bounded without rejecting a delayed scheduled event', () => {
   resetGatewayAttemptBudget();
-  const now = Date.parse('2026-07-25T21:05:00.000Z');
+  const now = Date.parse('2026-07-25T22:17:00.000Z');
   for (let index = 0; index < MAX_GATEWAY_CONNECTION_ATTEMPTS; index += 1) {
-    consumeGatewayAttempt({ now: now + index, env: scheduleEnv });
+    consumeGatewayAttempt({ now: now + index });
   }
   assert.throws(
-    () => consumeGatewayAttempt({ now: now + 1000, env: scheduleEnv }),
+    () => consumeGatewayAttempt({ now: now + 1000 }),
     error => error.code === 'GATEWAY_ATTEMPT_BUDGET_EXCEEDED' && error.retryable === false
   );
   resetGatewayAttemptBudget();
@@ -159,8 +148,9 @@ test('manual and single scheduled startup paths verify without performing a game
   assert.equal(report.automaticSchedule.cron, '5 21 * * *');
   assert.equal(report.automaticSchedule.kst, '06:05');
   assert.equal(report.automaticSchedule.attemptsPerDay, 1);
+  assert.equal(report.automaticSchedule.delayedRunnerStillExecutes, true);
   assert.equal(report.cases.scheduled0605.shouldRun, true);
-  assert.equal(report.cases.delayed0625.shouldRun, false);
+  assert.equal(report.cases.delayed0717.shouldRun, true);
   assert.equal(report.cases.rejectedFormerMultiSchedule.shouldRun, false);
   assert.equal(report.cases.manualConfirmed.shouldRun, true);
   assert.equal(report.cases.manualUnconfirmed.shouldRun, false);

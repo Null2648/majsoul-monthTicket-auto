@@ -2,9 +2,6 @@ name: Attendance Safety Check
 run-name: Attendance Safety Check · ${{ github.event_name }}
 
 on:
-  schedule:
-    - cron: '50 6 * * *'
-      timezone: 'Asia/Seoul'
   workflow_dispatch:
   pull_request:
     branches:
@@ -38,18 +35,13 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Validate safe attendance policy
+      - name: Validate single attendance schedule
         run: node --test test/attendance-schedule.test.js
 
   check:
-    if: >-
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    concurrency:
-      group: majsoul-attendance-safety-check
-      cancel-in-progress: false
     permissions:
       contents: read
 
