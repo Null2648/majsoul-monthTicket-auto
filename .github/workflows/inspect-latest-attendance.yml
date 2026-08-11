@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect patch workflow
+      - name: Inspect latest patch workflow attempt
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -35,5 +35,5 @@ jobs:
           if [[ -n "${failed_job}" ]]; then
             curl --location --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/jobs/${failed_job}/logs" > /tmp/job.log
             echo '--- PATCH WORKFLOW FAILURE ---'
-            grep -Eai 'error|failed|failure|expected one match|test|assert|process completed|python|patch|commit|push' /tmp/job.log | tail -n 180 || true
+            grep -Eai 'error|failed|failure|expected one|test|assert|process completed|python|patch|commit|push' /tmp/job.log | tail -n 200 || true
           fi
