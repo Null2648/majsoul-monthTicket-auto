@@ -1,4 +1,4 @@
-name: Inspect Latest Attendance Failure
+name: Inspect Repair Workflow
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect latest scheduled attendance run
+      - name: Inspect patch workflow
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -24,46 +24,16 @@ jobs:
         run: |
           set -euo pipefail
           api="https://api.github.com/repos/${REPOSITORY}"
-          runs="$(curl --fail-with-body --silent --show-error \
-            --header 'Accept: application/vnd.github+json' \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header 'X-GitHub-Api-Version: 2022-11-28' \
-            "${api}/actions/workflows/main.yml/runs?event=schedule&per_page=10")"
-          printf '%s' "${runs}" > /tmp/runs.json
-          run_id="$(node -e "const x=require('/tmp/runs.json'); const r=x.workflow_runs?.[0]; if(!r) process.exit(2); console.log(r.id)")"
-          node - <<'NODE'
-          const x = require('/tmp/runs.json');
-          const r = x.workflow_runs?.[0];
-          console.log(JSON.stringify({run_id:r?.id,status:r?.status,conclusion:r?.conclusion,created_at:r?.created_at,updated_at:r?.updated_at,head_sha:r?.head_sha,event:r?.event,run_number:r?.run_number}, null, 2));
-          NODE
-          jobs="$(curl --fail-with-body --silent --show-error \
-            --header 'Accept: application/vnd.github+json' \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header 'X-GitHub-Api-Version: 2022-11-28' \
-            "${api}/actions/runs/${run_id}/jobs?per_page=100")"
-          printf '%s' "${jobs}" > /tmp/jobs.json
-          node - <<'NODE'
-          const x = require('/tmp/jobs.json');
-          for (const j of x.jobs || []) {
-            console.log(`JOB ${j.id} ${j.name}: ${j.status}/${j.conclusion}`);
-            for (const s of j.steps || []) console.log(`  STEP ${s.number} ${s.name}: ${s.status}/${s.conclusion}`);
-          }
-          NODE
-          failed_job="$(node -e "const x=require('/tmp/jobs.json'); const j=(x.jobs||[]).find(j=>j.conclusion==='failure'||j.conclusion==='cancelled'); if(j) console.log(j.id)")"
+          headers=(-H 'Accept: application/vnd.github+json' -H "Authorization: Bearer ${GH_TOKEN}" -H 'X-GitHub-Api-Version: 2022-11-28')
+          curl --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/workflows/apply-update-resilience-fix.yml/runs?per_page=5" > /tmp/runs.json
+          jq '{runs: [.workflow_runs[] | {id,status,conclusion,event,head_branch,head_sha,created_at,updated_at}]}' /tmp/runs.json
+          run_id="$(jq -r '.workflow_runs[0].id // empty' /tmp/runs.json)"
+          [[ -n "${run_id}" ]] || { echo 'No patch workflow run found'; exit 2; }
+          curl --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/runs/${run_id}/jobs?per_page=100" > /tmp/jobs.json
+          jq '.jobs[] | {id,name,status,conclusion,steps:[.steps[]? | {number,name,status,conclusion}]}' /tmp/jobs.json
+          failed_job="$(jq -r '.jobs[] | select(.conclusion=="failure" or .conclusion=="cancelled") | .id' /tmp/jobs.json | head -n1)"
           if [[ -n "${failed_job}" ]]; then
-            curl --location --fail-with-body --silent --show-error \
-              --header 'Accept: application/vnd.github+json' \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              "${api}/actions/jobs/${failed_job}/logs" > /tmp/job.log
-            node - <<'NODE'
-            const fs=require('fs');
-            let text=fs.readFileSync('/tmp/job.log','utf8');
-            const lines=text.split(/\r?\n/).filter(l=>/(error|failed|failure|oauth|auth|gateway|protocol|version|yostar|metadata|login|client|resource|code=|code:)/i.test(l));
-            const scrub=s=>s
-              .replace(/(authorization|token|password|secret|access[_ -]?token)\s*[:=]\s*[^\s,;]+/gi,'$1=[REDACTED]')
-              .replace(/[A-Za-z0-9+/_=-]{80,}/g,'[REDACTED_LONG_VALUE]');
-            console.log('--- FILTERED FAILED JOB LOG ---');
-            console.log(lines.slice(-160).map(scrub).join('\n'));
-            NODE
+            curl --location --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/jobs/${failed_job}/logs" > /tmp/job.log
+            echo '--- PATCH WORKFLOW FAILURE ---'
+            grep -Eai 'error|failed|failure|expected one match|test|assert|process completed|python|patch|commit|push' /tmp/job.log | tail -n 180 || true
           fi
