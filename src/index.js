@@ -444,11 +444,21 @@ function getClientVersionStringCandidates({
   });
 }
 
+function getRpcErrorMessage(error) {
+  return String(
+    error?.response?.error?.message ||
+    error?.message ||
+    error ||
+    ''
+  );
+}
+
 function isVersionStringError(error) {
-  const message = error?.message || String(error);
+  const message = getRpcErrorMessage(error);
   return (
-    message.includes('version_str') ||
-    message.includes('client_version_string')
+    /version[_\s-]*(?:str|string)/i.test(message) ||
+    /client[_\s-]*version/i.test(message) ||
+    /ERR_CLIENT_VERSION/i.test(message)
   );
 }
 
@@ -457,7 +467,7 @@ function isClientVersionProbeError(error) {
     isVersionStringError(error) ||
     (
       error instanceof MajsoulRpcError &&
-      error.operation === 'oauth2Auth' &&
+      (error.operation === 'oauth2Auth' || error.operation === 'oauth2Login') &&
       error.rpcCode === 150
     )
   );
@@ -467,7 +477,18 @@ function isConnectionQueueError(error) {
   return (
     error instanceof MajsoulRpcError &&
     error.operation === 'oauth2Auth' &&
-    error.rpcCode === 151
+    error.rpcCode === 151 &&
+    !isClientVersionProbeError(error)
+  );
+}
+
+function shouldForceClientVersionRefresh(error, alreadyForced = false) {
+  return Boolean(
+    !alreadyForced &&
+    (
+      error?.clientVersionCandidatesExhausted === true ||
+      error?.code === 'CLIENT_VERSION_CANDIDATES_EXHAUSTED'
+    )
   );
 }
 
@@ -588,15 +609,16 @@ async function loadServerContext(server) {
     productVersion,
     buildId
   );
-  let detectedClientVersionStrings = [];
+  const detectedClientVersionStrings = resolveClientVersionStrings({
+    productVersion
+  });
 
   if (cacheIsCurrent) {
-    console.log('client metadata unchanged -> using the last successful cached settings');
+    console.log(
+      'client metadata unchanged -> using the last successful cached settings first; current Unity metadata remains armed as fallback'
+    );
   } else {
     console.log('client metadata update detected -> refreshing official version sources');
-    detectedClientVersionStrings = resolveClientVersionStrings({
-      productVersion
-    });
   }
 
   const clientVersionStringCandidates = getClientVersionStringCandidates({
@@ -1125,11 +1147,11 @@ async function createSession(context, credentials, { onCredentialAccepted } = {}
   const error = new Error(
     `All supported client metadata candidates were rejected during authentication: ${JSON.stringify(errors)}`
   );
-  error.yostarAuthRejected = errors.some(
-    candidate =>
-      candidate.operation === 'oauth2Auth' &&
-      candidate.rpcCode === 151
-  );
+  error.code = 'CLIENT_VERSION_CANDIDATES_EXHAUSTED';
+  error.clientVersionCandidatesExhausted = true;
+  // Every captured failure here was already classified as a client-version
+  // mismatch. Do not reinterpret code 151 as an expired YoStar credential.
+  error.yostarAuthRejected = false;
   error.retryable = false;
   throw error;
 }
@@ -1416,6 +1438,7 @@ async function run() {
   console.log(`selected server: ${server.key}`);
 
   let session;
+  let forcedClientMetadataRefresh = false;
 
   for (let attempt = 1; attempt <= SESSION_BOOTSTRAP_ATTEMPTS; attempt += 1) {
     try {
@@ -1423,6 +1446,30 @@ async function run() {
       session = await createSessionWithYostarRefresh(context, credentials);
       break;
     } catch (error) {
+      if (
+        shouldForceClientVersionRefresh(error, forcedClientMetadataRefresh) &&
+        attempt < SESSION_BOOTSTRAP_ATTEMPTS
+      ) {
+        forcedClientMetadataRefresh = true;
+        console.warn(
+          'all current client-version candidates were rejected -> force-refreshing official client assets once'
+        );
+        try {
+          const { prepareOfficialClientVersionDiscovery } = require('./official-client-version');
+          await prepareOfficialClientVersionDiscovery({
+            serverKey: server.key,
+            base: server.base,
+            forceRefresh: true
+          });
+          console.log('official client assets force-refreshed; rebuilding login candidates');
+          continue;
+        } catch (refreshError) {
+          console.warn(
+            `forced official client refresh failed: ${refreshError?.message || refreshError}`
+          );
+        }
+      }
+
       const shouldRetry =
         error?.retryable !== false &&
         (
@@ -1469,6 +1516,7 @@ module.exports = {
   ensureRequestConnectionPlatformField,
   getServerConfig,
   getClientVersionStringCandidates,
+  getRpcErrorMessage,
   isConnectionQueueError,
   isClientVersionProbeError,
   isVersionStringError,
@@ -1479,6 +1527,7 @@ module.exports = {
   requireRpcSuccess,
   run,
   runActions,
+  shouldForceClientVersionRefresh,
   shouldRefreshYostarCredentials,
   shouldRetryWithOauthCode
 };
