@@ -482,6 +482,16 @@ function isConnectionQueueError(error) {
   );
 }
 
+function shouldForceClientVersionRefresh(error, alreadyForced = false) {
+  return Boolean(
+    !alreadyForced &&
+    (
+      error?.clientVersionCandidatesExhausted === true ||
+      error?.code === 'CLIENT_VERSION_CANDIDATES_EXHAUSTED'
+    )
+  );
+}
+
 function buildRoutesUrl(gatewayUrl, version, lang) {
   const url = new URL(`${gatewayUrl.replace(/\/+$/, '')}/api/clientgate/routes`);
   url.searchParams.set('platform', 'Web');
@@ -1428,6 +1438,7 @@ async function run() {
   console.log(`selected server: ${server.key}`);
 
   let session;
+  let forcedClientMetadataRefresh = false;
 
   for (let attempt = 1; attempt <= SESSION_BOOTSTRAP_ATTEMPTS; attempt += 1) {
     try {
@@ -1435,6 +1446,30 @@ async function run() {
       session = await createSessionWithYostarRefresh(context, credentials);
       break;
     } catch (error) {
+      if (
+        shouldForceClientVersionRefresh(error, forcedClientMetadataRefresh) &&
+        attempt < SESSION_BOOTSTRAP_ATTEMPTS
+      ) {
+        forcedClientMetadataRefresh = true;
+        console.warn(
+          'all current client-version candidates were rejected -> force-refreshing official client assets once'
+        );
+        try {
+          const { prepareOfficialClientVersionDiscovery } = require('./official-client-version');
+          await prepareOfficialClientVersionDiscovery({
+            serverKey: server.key,
+            base: server.base,
+            forceRefresh: true
+          });
+          console.log('official client assets force-refreshed; rebuilding login candidates');
+          continue;
+        } catch (refreshError) {
+          console.warn(
+            `forced official client refresh failed: ${refreshError?.message || refreshError}`
+          );
+        }
+      }
+
       const shouldRetry =
         error?.retryable !== false &&
         (
@@ -1492,6 +1527,7 @@ module.exports = {
   requireRpcSuccess,
   run,
   runActions,
+  shouldForceClientVersionRefresh,
   shouldRefreshYostarCredentials,
   shouldRetryWithOauthCode
 };

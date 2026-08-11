@@ -5,7 +5,8 @@ const {
   MajsoulRpcError,
   buildClientAuthenticationAttempts,
   isClientVersionProbeError,
-  isConnectionQueueError
+  isConnectionQueueError,
+  shouldForceClientVersionRefresh
 } = require('../src/index');
 const {
   mergeDiscoveredClientVersionStrings
@@ -50,4 +51,15 @@ test('client recovery advances through candidate strings instead of repeating th
     attempts.map(attempt => attempt.clientVersionString),
     ['web-0.11.252', 'WebGL_2022-4.0.12']
   );
+});
+
+
+test('exhausted version candidates trigger one forced official refresh only', () => {
+  const error = Object.assign(new Error('all client versions rejected'), {
+    code: 'CLIENT_VERSION_CANDIDATES_EXHAUSTED',
+    clientVersionCandidatesExhausted: true
+  });
+  assert.equal(shouldForceClientVersionRefresh(error, false), true);
+  assert.equal(shouldForceClientVersionRefresh(error, true), false);
+  assert.equal(shouldForceClientVersionRefresh(new Error('network error'), false), false);
 });
