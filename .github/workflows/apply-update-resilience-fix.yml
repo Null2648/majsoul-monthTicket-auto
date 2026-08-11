@@ -27,42 +27,20 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          def replace_once(path, old, new):
+          def regex_once(path, pattern, replacement):
               p = Path(path)
               text = p.read_text()
-              count = text.count(old)
+              updated, count = re.subn(pattern, lambda _: replacement, text, count=1, flags=re.S)
               if count != 1:
-                  raise SystemExit(f'{path}: expected one match, found {count}')
-              p.write_text(text.replace(old, new, 1))
+                  raise SystemExit(f'{path}: expected one regex match, found {count}: {pattern[:80]}')
+              p.write_text(updated)
 
-          replace_once('src/index.js', '''function isVersionStringError(error) {
-            const message = error?.message || String(error);
-            return (
-              message.includes('version_str') ||
-              message.includes('client_version_string')
-            );
-          }
-
-          function isClientVersionProbeError(error) {
-            return (
-              isVersionStringError(error) ||
-              (
-                error instanceof MajsoulRpcError &&
-                error.operation === 'oauth2Auth' &&
-                error.rpcCode === 150
-              )
-            );
-          }
-
-          function isConnectionQueueError(error) {
-            return (
-              error instanceof MajsoulRpcError &&
-              error.operation === 'oauth2Auth' &&
-              error.rpcCode === 151
-            );
-          }
-          ''', '''function getRpcErrorMessage(error) {
+          regex_once(
+              'src/index.js',
+              r"function isVersionStringError\(error\) \{.*?\n\}\n\nfunction buildRoutesUrl",
+              r'''function getRpcErrorMessage(error) {
             return String(
               error?.response?.error?.message ||
               error?.message ||
@@ -74,8 +52,8 @@ jobs:
           function isVersionStringError(error) {
             const message = getRpcErrorMessage(error);
             return (
-              /version[_\\s-]*(?:str|string)/i.test(message) ||
-              /client[_\\s-]*version/i.test(message) ||
+              /version[_\s-]*(?:str|string)/i.test(message) ||
+              /client[_\s-]*version/i.test(message) ||
               /ERR_CLIENT_VERSION/i.test(message)
             );
           }
@@ -99,19 +77,14 @@ jobs:
               !isClientVersionProbeError(error)
             );
           }
-          ''')
 
-          replace_once('src/index.js', '''  let detectedClientVersionStrings = [];
+          function buildRoutesUrl'''
+          )
 
-            if (cacheIsCurrent) {
-              console.log('client metadata unchanged -> using the last successful cached settings');
-            } else {
-              console.log('client metadata update detected -> refreshing official version sources');
-              detectedClientVersionStrings = resolveClientVersionStrings({
-                productVersion
-              });
-            }
-          ''', '''  const detectedClientVersionStrings = resolveClientVersionStrings({
+          regex_once(
+              'src/index.js',
+              r"  let detectedClientVersionStrings = \[\];\n\n  if \(cacheIsCurrent\) \{.*?\n  \}\n\n  const clientVersionStringCandidates =",
+              r'''  const detectedClientVersionStrings = resolveClientVersionStrings({
             productVersion
           });
 
@@ -122,50 +95,47 @@ jobs:
             } else {
               console.log('client metadata update detected -> refreshing official version sources');
             }
-          ''')
 
-          replace_once('src/index.js', '''  error.yostarAuthRejected = errors.some(
-            candidate =>
-              candidate.operation === 'oauth2Auth' &&
-              candidate.rpcCode === 151
-          );
-            error.retryable = false;
-          ''', '''  error.code = 'CLIENT_VERSION_CANDIDATES_EXHAUSTED';
+            const clientVersionStringCandidates ='''
+          )
+
+          regex_once(
+              'src/index.js',
+              r"  error\.yostarAuthRejected = errors\.some\(.*?\n  error\.retryable = false;",
+              r'''  error.code = 'CLIENT_VERSION_CANDIDATES_EXHAUSTED';
             error.clientVersionCandidatesExhausted = true;
-            // Reaching this aggregate means every captured failure was already classified
-            // as a client-version mismatch. Do not misclassify it as expired YoStar auth.
+            // Every captured failure here was already classified as a client-version
+            // mismatch. Do not reinterpret code 151 as an expired YoStar credential.
             error.yostarAuthRejected = false;
-            error.retryable = false;
-          ''')
+            error.retryable = false;'''
+          )
 
-          replace_once('src/index.js', '''  getServerConfig,
-            getClientVersionStringCandidates,
-            isConnectionQueueError,
-          ''', '''  getServerConfig,
+          regex_once(
+              'src/index.js',
+              r"  getServerConfig,\n  getClientVersionStringCandidates,\n  isConnectionQueueError,",
+              r'''  getServerConfig,
             getClientVersionStringCandidates,
             getRpcErrorMessage,
-            isConnectionQueueError,
-          ''')
+            isConnectionQueueError,'''
+          )
 
-          replace_once('src/official-client-version.js', '''    detectedClientVersionStrings: [
-              ...discoveredStrings,
-              ...(options.detectedClientVersionStrings || [])
-            ]
-          ''', '''    detectedClientVersionStrings: [
-              // The current Unity product/build metadata is the strongest first candidate
-              // after an update. JavaScript-derived resource hints remain immediate fallbacks.
-              ...(options.detectedClientVersionStrings || []),
-              ...discoveredStrings
-            ]
-          ''')
+          regex_once(
+              'src/official-client-version.js',
+              r"function mergeDiscoveredClientVersionStrings\(options = \{\}, discoveredStrings = \[\]\) \{.*?\n\}\n\nfunction installOfficialClientVersionStrings",
+              r'''function mergeDiscoveredClientVersionStrings(options = {}, discoveredStrings = []) {
+            return {
+              ...options,
+              detectedClientVersionStrings: [
+                // Current Unity product/build metadata is the strongest first candidate
+                // after an update. JavaScript-derived strings remain immediate fallbacks.
+                ...(options.detectedClientVersionStrings || []),
+                ...discoveredStrings
+              ]
+            };
+          }
 
-          for temporary in [
-              Path('scripts/update-probe.js'),
-              Path('.github/workflows/inspect-latest-attendance.yml'),
-              Path('.github/workflows/apply-update-resilience-fix.yml'),
-          ]:
-              if temporary.exists():
-                  temporary.unlink()
+          function installOfficialClientVersionStrings'''
+          )
           PY
 
       - name: Install dependencies
@@ -174,12 +144,19 @@ jobs:
       - name: Run regression suite
         run: npm test
 
+      - name: Remove temporary repair helpers
+        shell: bash
+        run: |
+          rm -f scripts/update-probe.js
+          rm -f .github/workflows/inspect-latest-attendance.yml
+          rm -f .github/workflows/apply-update-resilience-fix.yml
+
       - name: Commit repair
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add src/index.js src/official-client-version.js test/client-version-update-resilience.test.js scripts/update-probe.js .github/workflows/inspect-latest-attendance.yml .github/workflows/apply-update-resilience-fix.yml || true
+          git add -A -- src/index.js src/official-client-version.js test/client-version-update-resilience.test.js scripts/update-probe.js .github/workflows/inspect-latest-attendance.yml .github/workflows/apply-update-resilience-fix.yml
           git commit -m 'Repair automatic client-version recovery'
           git push origin HEAD:agent/repair-update-resilience
