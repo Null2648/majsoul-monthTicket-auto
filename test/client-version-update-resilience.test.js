@@ -22,6 +22,13 @@ test('ERR_CLIENT_VERSION is treated as a version probe even when the numeric cod
   }
 });
 
+test('version rejection is also detected if it moves from oauth2Auth to oauth2Login', () => {
+  const error = new MajsoulRpcError('oauth2Login', {
+    error: { code: 451, level: 2, message: 'client_version_string rejected' }
+  });
+  assert.equal(isClientVersionProbeError(error), true);
+});
+
 test('non-version code 151 retains the connection retry path', () => {
   const error = new MajsoulRpcError('oauth2Auth', {
     error: { code: 151, level: 2, message: 'ERR_CONNECTION_QUEUE' }
@@ -52,7 +59,6 @@ test('client recovery advances through candidate strings instead of repeating th
     ['web-0.11.252', 'WebGL_2022-4.0.12']
   );
 });
-
 
 test('exhausted version candidates trigger one forced official refresh only', () => {
   const error = Object.assign(new Error('all client versions rejected'), {
