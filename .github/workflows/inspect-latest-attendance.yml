@@ -1,0 +1,39 @@
+name: Inspect Repair Workflow
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/inspect-latest-attendance.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect latest V2 patch workflow attempt
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPOSITORY}"
+          headers=(-H 'Accept: application/vnd.github+json' -H "Authorization: Bearer ${GH_TOKEN}" -H 'X-GitHub-Api-Version: 2022-11-28')
+          curl --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/workflows/apply-update-resilience-v2.yml/runs?per_page=5" > /tmp/runs.json
+          jq '{runs: [.workflow_runs[] | {id,status,conclusion,event,head_branch,head_sha,created_at,updated_at}]}' /tmp/runs.json
+          run_id="$(jq -r '.workflow_runs[0].id // empty' /tmp/runs.json)"
+          [[ -n "${run_id}" ]] || { echo 'No V2 patch workflow run found'; exit 2; }
+          curl --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/runs/${run_id}/jobs?per_page=100" > /tmp/jobs.json
+          jq '.jobs[] | {id,name,status,conclusion,steps:[.steps[]? | {number,name,status,conclusion}]}' /tmp/jobs.json
+          failed_job="$(jq -r '.jobs[] | select(.conclusion=="failure" or .conclusion=="cancelled") | .id' /tmp/jobs.json | head -n1)"
+          if [[ -n "${failed_job}" ]]; then
+            curl --location --fail-with-body --silent --show-error "${headers[@]}" "${api}/actions/jobs/${failed_job}/logs" > /tmp/job.log
+            echo '--- V2 PATCH WORKFLOW FAILURE ---'
+            grep -Eai 'error|failed|failure|expected one|test|assert|process completed|python|patch|commit|push|rebase' /tmp/job.log | tail -n 220 || true
+          fi
