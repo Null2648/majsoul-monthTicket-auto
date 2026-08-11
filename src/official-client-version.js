@@ -567,8 +567,10 @@ function mergeDiscoveredClientVersionStrings(options = {}, discoveredStrings = [
   return {
     ...options,
     detectedClientVersionStrings: [
-      ...discoveredStrings,
-      ...(options.detectedClientVersionStrings || [])
+      // Current Unity product/build metadata is the strongest first candidate
+      // after an update. JavaScript-derived strings remain immediate fallbacks.
+      ...(options.detectedClientVersionStrings || []),
+      ...discoveredStrings
     ]
   };
 }

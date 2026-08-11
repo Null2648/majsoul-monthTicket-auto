@@ -114,15 +114,16 @@ test('unchanged official metadata reuses the last successful client string', () 
   }
 });
 
-test('discovered exact strings are inserted ahead of generated detected candidates', () => {
+test('current Unity candidate stays ahead of discovered resource hints', () => {
   const merged = mergeDiscoveredClientVersionStrings(
-    { detectedClientVersionStrings: ['WebGL_2022-4.0.11'] },
-    ['WebGL_2023-0.20.1']
+    { detectedClientVersionStrings: ['WebGL_2022-4.0.12'] },
+    ['web-0.11.252', 'WebGL_2023-0.20.1']
   );
 
   assert.deepEqual(merged.detectedClientVersionStrings, [
-    'WebGL_2023-0.20.1',
-    'WebGL_2022-4.0.11'
+    'WebGL_2022-4.0.12',
+    'web-0.11.252',
+    'WebGL_2023-0.20.1'
   ]);
 });
 

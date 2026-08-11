@@ -444,11 +444,21 @@ function getClientVersionStringCandidates({
   });
 }
 
+function getRpcErrorMessage(error) {
+  return String(
+    error?.response?.error?.message ||
+    error?.message ||
+    error ||
+    ''
+  );
+}
+
 function isVersionStringError(error) {
-  const message = error?.message || String(error);
+  const message = getRpcErrorMessage(error);
   return (
-    message.includes('version_str') ||
-    message.includes('client_version_string')
+    /version[_\s-]*(?:str|string)/i.test(message) ||
+    /client[_\s-]*version/i.test(message) ||
+    /ERR_CLIENT_VERSION/i.test(message)
   );
 }
 
@@ -457,7 +467,7 @@ function isClientVersionProbeError(error) {
     isVersionStringError(error) ||
     (
       error instanceof MajsoulRpcError &&
-      error.operation === 'oauth2Auth' &&
+      (error.operation === 'oauth2Auth' || error.operation === 'oauth2Login') &&
       error.rpcCode === 150
     )
   );
@@ -467,7 +477,8 @@ function isConnectionQueueError(error) {
   return (
     error instanceof MajsoulRpcError &&
     error.operation === 'oauth2Auth' &&
-    error.rpcCode === 151
+    error.rpcCode === 151 &&
+    !isClientVersionProbeError(error)
   );
 }
 
@@ -588,15 +599,16 @@ async function loadServerContext(server) {
     productVersion,
     buildId
   );
-  let detectedClientVersionStrings = [];
+  const detectedClientVersionStrings = resolveClientVersionStrings({
+    productVersion
+  });
 
   if (cacheIsCurrent) {
-    console.log('client metadata unchanged -> using the last successful cached settings');
+    console.log(
+      'client metadata unchanged -> using the last successful cached settings first; current Unity metadata remains armed as fallback'
+    );
   } else {
     console.log('client metadata update detected -> refreshing official version sources');
-    detectedClientVersionStrings = resolveClientVersionStrings({
-      productVersion
-    });
   }
 
   const clientVersionStringCandidates = getClientVersionStringCandidates({
@@ -1125,11 +1137,11 @@ async function createSession(context, credentials, { onCredentialAccepted } = {}
   const error = new Error(
     `All supported client metadata candidates were rejected during authentication: ${JSON.stringify(errors)}`
   );
-  error.yostarAuthRejected = errors.some(
-    candidate =>
-      candidate.operation === 'oauth2Auth' &&
-      candidate.rpcCode === 151
-  );
+  error.code = 'CLIENT_VERSION_CANDIDATES_EXHAUSTED';
+  error.clientVersionCandidatesExhausted = true;
+  // Every captured failure here was already classified as a client-version
+  // mismatch. Do not reinterpret code 151 as an expired YoStar credential.
+  error.yostarAuthRejected = false;
   error.retryable = false;
   throw error;
 }
@@ -1469,6 +1481,7 @@ module.exports = {
   ensureRequestConnectionPlatformField,
   getServerConfig,
   getClientVersionStringCandidates,
+  getRpcErrorMessage,
   isConnectionQueueError,
   isClientVersionProbeError,
   isVersionStringError,
