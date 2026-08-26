@@ -189,6 +189,7 @@ jobs:
     timeout-minutes: 15
     concurrency:
       group: majsoul-attendance
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: write
