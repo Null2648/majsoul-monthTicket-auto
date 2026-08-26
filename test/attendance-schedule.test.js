@@ -135,6 +135,7 @@ test('login workflow has the 06:05 primary and 06:35 fallback only', () => {
   assert.match(main, /confirm_not_playing:/);
   assert.match(main, /npm ci --omit=dev --ignore-scripts/);
   assert.match(main, /group: majsoul-attendance/);
+  assert.match(main, /queue: max/);
   assert.match(main, /cancel-in-progress: false/);
   assert.equal(fs.existsSync(repoPath('.github', 'workflows', 'attendance-early-backup.yml')), false);
 });
