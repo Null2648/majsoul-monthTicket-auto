@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   AUTOMATIC_LOGIN_SCHEDULE,
+  MORNING_RETRY_SCHEDULE,
   WATCHDOG_SCHEDULE,
   decideAttendanceRun,
   formatKstDate,
@@ -21,7 +22,7 @@ test('KST date calculation is independent from runner timezone', () => {
   assert.equal(formatKstDate(new Date('2026-07-25T15:00:00.000Z')), '2026-07-26');
 });
 
-test('the single 06:05 event still runs when its runner starts late', () => {
+test('the 06:05 primary event still runs when its runner starts late', () => {
   assert.equal(AUTOMATIC_LOGIN_SCHEDULE, '5 21 * * *');
   for (const timestamp of [
     '2026-07-25T21:05:00.000Z',
@@ -35,13 +36,31 @@ test('the single 06:05 event still runs when its runner starts late', () => {
       now: new Date(timestamp)
     });
     assert.equal(result.shouldRun, true, timestamp);
-    assert.equal(result.reason, 'single-scheduled-event', timestamp);
-    assert.equal(result.stage, 'single-daily-schedule', timestamp);
+    assert.equal(result.reason, 'primary-scheduled-event', timestamp);
+    assert.equal(result.stage, 'primary-daily-schedule', timestamp);
+  }
+});
+
+test('the 06:35 fallback runs when the primary did not complete today', () => {
+  assert.equal(MORNING_RETRY_SCHEDULE, '35 21 * * *');
+  for (const timestamp of [
+    '2026-07-25T21:35:00.000Z',
+    '2026-07-25T22:17:00.000Z'
+  ]) {
+    const result = decideAttendanceRun({
+      eventName: 'schedule',
+      schedule: MORNING_RETRY_SCHEDULE,
+      lastSuccess: '2026-07-25',
+      now: new Date(timestamp)
+    });
+    assert.equal(result.shouldRun, true, timestamp);
+    assert.equal(result.reason, 'fallback-scheduled-event', timestamp);
+    assert.equal(result.stage, 'fallback-daily-schedule', timestamp);
   }
 });
 
 test('other schedule definitions are rejected', () => {
-  for (const schedule of ['7,17 6 * * *', '47,57 5 * * *', '13 12 * * *']) {
+  for (const schedule of ['10 21 * * *', '7,17 6 * * *', '47,57 5 * * *', '13 12 * * *']) {
     const result = decideAttendanceRun({
       eventName: 'schedule',
       schedule,
@@ -53,15 +72,17 @@ test('other schedule definitions are rejected', () => {
   }
 });
 
-test('successful marker suppresses the daily event before login work begins', () => {
-  const result = decideAttendanceRun({
-    eventName: 'schedule',
-    schedule: AUTOMATIC_LOGIN_SCHEDULE,
-    lastSuccess: '2026-07-26\n',
-    now: new Date('2026-07-25T22:17:00.000Z')
-  });
-  assert.equal(result.shouldRun, false);
-  assert.equal(result.reason, 'already-completed');
+test('successful marker suppresses both automatic events before login work begins', () => {
+  for (const schedule of [AUTOMATIC_LOGIN_SCHEDULE, MORNING_RETRY_SCHEDULE]) {
+    const result = decideAttendanceRun({
+      eventName: 'schedule',
+      schedule,
+      lastSuccess: '2026-07-26\n',
+      now: new Date('2026-07-25T22:17:00.000Z')
+    });
+    assert.equal(result.shouldRun, false, schedule);
+    assert.equal(result.reason, 'already-completed', schedule);
+  }
 });
 
 test('manual login requires explicit confirmation that the game is not active', () => {
@@ -104,14 +125,16 @@ test('manual status check never performs a login', () => {
   assert.equal(scheduleStage(WATCHDOG_SCHEDULE), 'safety-watchdog');
 });
 
-test('only the login workflow has one scheduled cron', () => {
+test('login workflow has the 06:05 primary and 06:35 fallback only', () => {
   const main = fs.readFileSync(repoPath('.github', 'workflows', 'main.yml'), 'utf8');
   const watchdog = fs.readFileSync(repoPath('.github', 'workflows', 'attendance-watchdog.yml'), 'utf8');
   const loginCrons = Array.from(main.matchAll(/cron:\s*'([^']+)'/g), match => match[1]);
-  assert.deepEqual(loginCrons, ['5 21 * * *']);
+  assert.deepEqual(loginCrons, ['5 21 * * *', '35 21 * * *']);
   assert.doesNotMatch(watchdog, /\bschedule:/);
   assert.match(watchdog, /workflow_dispatch:/);
   assert.match(main, /confirm_not_playing:/);
   assert.match(main, /npm ci --omit=dev --ignore-scripts/);
+  assert.match(main, /group: majsoul-attendance/);
+  assert.match(main, /cancel-in-progress: false/);
   assert.equal(fs.existsSync(repoPath('.github', 'workflows', 'attendance-early-backup.yml')), false);
 });
