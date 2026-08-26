@@ -4,8 +4,10 @@ run-name: >-
 
 on:
   schedule:
-    # 21:05 UTC = 06:05 KST. This is the repository's historically proven single schedule.
+    # Primary: 21:05 UTC = 06:05 KST.
     - cron: '5 21 * * *'
+    # Fallback: 21:35 UTC = 06:35 KST. If the primary already succeeded, the daily marker skips login.
+    - cron: '35 21 * * *'
   workflow_dispatch:
     inputs:
       confirm_not_playing:
