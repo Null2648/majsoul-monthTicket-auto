@@ -1,10 +1,14 @@
 const fs = require('node:fs');
 
 const TIME_ZONE = 'Asia/Seoul';
-// 21:05 UTC is 06:05 KST on the following calendar day. Korea has no DST.
-// There is exactly one automatic attendance event per day.
+// 21:05 UTC is 06:05 KST. 21:35 UTC is the fallback at 06:35 KST.
+// The fallback is allowed to start only when today's success marker is still missing.
 const AUTOMATIC_LOGIN_SCHEDULE = '5 21 * * *';
-const MORNING_RETRY_SCHEDULE = AUTOMATIC_LOGIN_SCHEDULE;
+const MORNING_RETRY_SCHEDULE = '35 21 * * *';
+const AUTOMATIC_LOGIN_SCHEDULES = new Set([
+  AUTOMATIC_LOGIN_SCHEDULE,
+  MORNING_RETRY_SCHEDULE
+]);
 const WATCHDOG_SCHEDULE = '50 6 * * *';
 
 function getKstDateTimeParts(date = new Date()) {
@@ -42,7 +46,8 @@ function normalizeAttendanceDate(value) {
 }
 
 function scheduleStage(schedule) {
-  if (schedule === AUTOMATIC_LOGIN_SCHEDULE) return 'single-daily-schedule';
+  if (schedule === AUTOMATIC_LOGIN_SCHEDULE) return 'primary-daily-schedule';
+  if (schedule === MORNING_RETRY_SCHEDULE) return 'fallback-daily-schedule';
   if (schedule === WATCHDOG_SCHEDULE) return 'safety-watchdog';
   return schedule ? 'scheduled-other' : 'manual';
 }
@@ -100,6 +105,8 @@ function decideAttendanceRun({
     });
   }
 
+  // Both automatic events consult the same persisted KST date marker. If either
+  // one has already completed today, the other exits before preflight/login.
   if (normalizedLastSuccess === today) {
     return decision({
       shouldRun: false,
@@ -110,7 +117,7 @@ function decideAttendanceRun({
     });
   }
 
-  if (scheduled && schedule !== AUTOMATIC_LOGIN_SCHEDULE) {
+  if (scheduled && !AUTOMATIC_LOGIN_SCHEDULES.has(schedule)) {
     return decision({
       shouldRun: false,
       reason: 'unsupported-schedule',
@@ -120,13 +127,13 @@ function decideAttendanceRun({
     });
   }
 
-  // GitHub may allocate a scheduled runner later than the cron minute. The cron
-  // still represents one daily event, so do not turn that event into a no-op
-  // merely because its runner started late.
+  // GitHub may allocate either scheduled runner later than its cron minute.
+  // Do not discard a delayed event: job-level concurrency serializes the two
+  // events, then this marker check ensures only the first successful one logs in.
   return decision({
     shouldRun: true,
     reason: scheduled
-      ? 'single-scheduled-event'
+      ? (schedule === MORNING_RETRY_SCHEDULE ? 'fallback-scheduled-event' : 'primary-scheduled-event')
       : (normalizedLastSuccess ? 'not-completed-today' : 'no-success-marker'),
     stage,
     today,
@@ -191,6 +198,7 @@ if (require.main === module) {
 
 module.exports = {
   AUTOMATIC_LOGIN_SCHEDULE,
+  AUTOMATIC_LOGIN_SCHEDULES,
   MORNING_RETRY_SCHEDULE,
   TIME_ZONE,
   WATCHDOG_SCHEDULE,
