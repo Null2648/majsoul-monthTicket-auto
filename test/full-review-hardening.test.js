@@ -142,15 +142,22 @@ test('protocol safety failures are fail-closed and non-retryable', () => {
   assert.equal(wrapProtocolSafetyError(breaking), breaking);
 });
 
-test('manual and single scheduled startup paths verify without performing a game login', () => {
+test('manual and dual scheduled startup paths verify without performing a game login', () => {
   const report = verifyStartupPaths();
   assert.equal(report.noLoginPerformed, true);
-  assert.equal(report.automaticSchedule.cron, '5 21 * * *');
-  assert.equal(report.automaticSchedule.kst, '06:05');
-  assert.equal(report.automaticSchedule.attemptsPerDay, 1);
-  assert.equal(report.automaticSchedule.delayedRunnerStillExecutes, true);
+  assert.equal(report.automaticSchedules.primary.cron, '5 21 * * *');
+  assert.equal(report.automaticSchedules.primary.kst, '06:05');
+  assert.equal(report.automaticSchedules.fallback.cron, '35 21 * * *');
+  assert.equal(report.automaticSchedules.fallback.kst, '06:35');
+  assert.equal(report.automaticSchedules.fallback.skippedAfterPrimarySuccess, true);
+  assert.equal(report.automaticSchedules.scheduledEventsPerDay, 2);
+  assert.equal(report.automaticSchedules.successfulLoginTargetPerDay, 1);
+  assert.equal(report.automaticSchedules.delayedRunnerStillExecutes, true);
+  assert.equal(report.automaticSchedules.serializedByConcurrency, true);
   assert.equal(report.cases.scheduled0605.shouldRun, true);
-  assert.equal(report.cases.delayed0717.shouldRun, true);
+  assert.equal(report.cases.delayedPrimary0717.shouldRun, true);
+  assert.equal(report.cases.scheduled0635Fallback.shouldRun, true);
+  assert.equal(report.cases.fallbackAfterPrimarySuccess.shouldRun, false);
   assert.equal(report.cases.rejectedFormerMultiSchedule.shouldRun, false);
   assert.equal(report.cases.manualConfirmed.shouldRun, true);
   assert.equal(report.cases.manualUnconfirmed.shouldRun, false);
