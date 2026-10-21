@@ -1,23 +1,23 @@
 {
-  "jp": "4.0.12",
+  "jp": "4.0.18",
   "clientVersionStrings": {
-    "jp": "WebGL_2022-4.0.12"
+    "jp": "WebGL_2022-4.0.18"
   },
   "sourceVersions": {
     "jp": "0.11.252.w"
   },
   "productVersions": {
-    "jp": "4.0.12"
+    "jp": "4.0.18"
   },
   "buildIds": {
-    "jp": "jp-WebGL-release-4.0.12(13)"
+    "jp": "jp-WebGL-release-4.0.18(19)"
   },
-  "updatedAt": "2026-08-11T04:41:15.959Z",
+  "updatedAt": "2026-10-21T23:55:29.814Z",
   "structureHints": {
     "jp": {
       "sourceVersion": "0.11.252.w",
-      "productVersion": "4.0.12",
-      "buildId": "jp-WebGL-release-4.0.12(13)",
+      "productVersion": "4.0.18",
+      "buildId": "jp-WebGL-release-4.0.18(19)",
       "configUrls": [
         "https://game.mahjongsoul.com/config.json",
         "https://game.mahjongsoul.com/v0.11.252.w/config.json",
